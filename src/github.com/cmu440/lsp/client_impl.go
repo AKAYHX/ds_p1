@@ -10,6 +10,10 @@ import (
 	"sort"
 )
 
+const (
+	MaxPacketSize = 1000
+)
+
 type client struct {
 	// TODO: implement this!
 	udpConn *lspnet.UDPConn
@@ -59,7 +63,7 @@ func NewClient(hostport string, initialSeqNum int, params *Params) (Client, erro
 		return nil, err
 	}
 
-	var buffer []byte
+	buffer := make([]byte, MaxPacketSize)
 	var response Message
 	bytes, _, err := udpConn.ReadFromUDP(buffer)
 	if err = json.Unmarshal(buffer[:bytes], &response); err != nil {
@@ -135,7 +139,7 @@ func (c *client) Read() ([]byte, error) {
 }
 
 func (c *client) ProcessMessage() {
-	var buffer []byte
+	buffer := make([]byte, MaxPacketSize)
 	var response Message
 	bytes, _, err := c.udpConn.ReadFromUDP(buffer)
 	if err = json.Unmarshal(buffer[:bytes], &response); err != nil {
