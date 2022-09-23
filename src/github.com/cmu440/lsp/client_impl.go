@@ -73,7 +73,7 @@ func NewClient(hostport string, initialSeqNum int, params *Params) (Client, erro
 			connID:        response.ConnID,
 			currentSeqNum: make(chan int, 1),
 			currentAckNum: make(chan int, 1),
-			ackedMsg:      make(chan []Message, 1),
+			ackedMsg:      make(chan []Message, 1), // TODO update to use pointer
 			ackQueue:      make(chan []Message, 1),
 		}
 		cli.currentSeqNum <- initialSeqNum
@@ -97,11 +97,26 @@ func (c *client) Read() ([]byte, error) {
 	for {
 		select {
 		case msgList := <-c.ackedMsg:
-			if len(msgList) > 0 {
+			if len(msgList) == 0 {
+				c.ackedMsg <- msgList
+			} else {
 				c.ackedMsg <- msgList[1:]
-				return msgList[0].Payload, nil
+				msg := msgList[0]
+
+				if msg.Type == MsgData {
+					// Ack the data
+					ack, err := json.Marshal(NewAck(c.connID, msg.SeqNum))
+					if err != nil {
+						return nil, err
+					}
+
+					_, err = c.udpConn.WriteToUDP(ack, c.udpAddr)
+					if err != nil {
+						return nil, err
+					}
+				}
+				return msg.Payload, nil
 			}
-			c.ackedMsg <- msgList
 		}
 	}
 }
@@ -166,6 +181,15 @@ func (c *client) ProcessMessage() {
 		c.currentAckNum <- ackNum
 	} else if response.Type == MsgData {
 		// Handle data
+		ackNum := <-c.currentAckNum
+		if ackNum == response.SeqNum-1 {
+			c.AddAckedMsg(response)
+		} else {
+			queue := <-c.ackQueue
+			queue = append(queue, response)
+			c.ackQueue <- queue
+		}
+		c.currentAckNum <- ackNum
 	}
 }
 
@@ -180,13 +204,7 @@ func (c *client) Write(payload []byte) error {
 	seqNum++
 	c.currentSeqNum <- seqNum
 
-	message, err := json.Marshal(&Message{
-		Type:    MsgData,
-		ConnID:  c.connID,
-		SeqNum:  seqNum,
-		Size:    len(payload),
-		Payload: payload,
-	})
+	message, err := json.Marshal(NewData(c.connID, seqNum, len(payload), payload, 0))
 	if err != nil {
 		return err
 	}
@@ -200,18 +218,4 @@ func (c *client) Close() error {
 
 	}
 	return nil
-}
-
-func min(x int, y int) int {
-	if x > y {
-		return y
-	}
-	return x
-}
-
-func max(x int, y int) int {
-	if x < y {
-		return y
-	}
-	return x
 }
