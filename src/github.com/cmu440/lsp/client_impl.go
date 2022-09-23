@@ -15,6 +15,7 @@ type client struct {
 	udpConn *lspnet.UDPConn
 	udpAddr *lspnet.UDPAddr
 	connID  int
+	closed chan bool
 	// Current sent seq num
 	currentSeqNum chan int
 	// Current ack-ed seq num
@@ -71,11 +72,13 @@ func NewClient(hostport string, initialSeqNum int, params *Params) (Client, erro
 			udpConn:       udpConn,
 			udpAddr:       addr,
 			connID:        response.ConnID,
+			closed: make(chan bool, 1),
 			currentSeqNum: make(chan int, 1),
 			currentAckNum: make(chan int, 1),
 			ackedMsg:      make(chan []Message, 1), // TODO update to use pointer
 			ackQueue:      make(chan []Message, 1),
 		}
+		cli.closed <- false
 		cli.currentSeqNum <- initialSeqNum
 		cli.currentAckNum <- -1
 		cli.ackQueue <- []Message{}
@@ -92,6 +95,12 @@ func (c *client) ConnID() int {
 
 func (c *client) Read() ([]byte, error) {
 	// TODO: remove this line when you are ready to begin implementing this method.
+	closed := <- c.closed
+	c.closed <- closed
+	if closed {
+		return nil, nil
+	}
+
 	go c.ProcessMessage()
 
 	for {
@@ -115,6 +124,10 @@ func (c *client) Read() ([]byte, error) {
 						return nil, err
 					}
 				}
+
+				ackNum := <- c.currentAckNum
+				ackNum = msg.SeqNum
+				c.currentAckNum <- ackNum
 				return msg.Payload, nil
 			}
 		}
@@ -134,19 +147,18 @@ func (c *client) ProcessMessage() {
 		return
 	}
 
+	ackNum := <-c.currentAckNum
+	c.currentAckNum <- ackNum
 	if response.Type == MsgAck {
 		// Handle Ack
-		ackNum := <-c.currentAckNum
 		if ackNum == response.SeqNum-1 {
 			// Case 1: the message comes in order
-			ackNum = response.SeqNum
 			c.AddAckedMsg(response)
 		} else {
 			// Case 2: the message comes out of order
 			queue := <-c.ackQueue
 			for i, msg := range queue {
 				if ackNum == msg.SeqNum-1 {
-					ackNum = msg.SeqNum
 					c.AddAckedMsg(msg)
 					queue[i] = response
 					break
@@ -158,13 +170,9 @@ func (c *client) ProcessMessage() {
 			})
 			c.ackQueue <- queue
 		}
-		c.currentAckNum <- ackNum
 
 	} else if response.Type == MsgCAck {
 		// Handle CAck
-		ackNum := <-c.currentAckNum
-		ackNum = response.SeqNum
-
 		queue := <-c.ackQueue
 		ackedMsg := <-c.ackedMsg
 		var newQueue []Message
@@ -178,10 +186,8 @@ func (c *client) ProcessMessage() {
 		c.ackedMsg <- ackedMsg
 		c.ackQueue <- newQueue
 
-		c.currentAckNum <- ackNum
 	} else if response.Type == MsgData {
 		// Handle data
-		ackNum := <-c.currentAckNum
 		if ackNum == response.SeqNum-1 {
 			c.AddAckedMsg(response)
 		} else {
@@ -189,7 +195,6 @@ func (c *client) ProcessMessage() {
 			queue = append(queue, response)
 			c.ackQueue <- queue
 		}
-		c.currentAckNum <- ackNum
 	}
 }
 
@@ -200,6 +205,12 @@ func (c *client) AddAckedMsg(msg Message) {
 }
 
 func (c *client) Write(payload []byte) error {
+	closed := <- c.closed
+	c.closed <- closed
+	if closed {
+		return nil
+	}
+
 	seqNum := <-c.currentSeqNum
 	seqNum++
 	c.currentSeqNum <- seqNum
@@ -214,8 +225,25 @@ func (c *client) Write(payload []byte) error {
 }
 
 func (c *client) Close() error {
-	for {
-
+	closed := <- c.closed
+	if closed {
+		c.closed <- closed
+		return nil
 	}
-	return nil
+	closed = true
+	c.closed <- closed
+
+	// Block until all pending msg processed
+	for {
+		ackNum := <- c.currentAckNum
+		c.currentAckNum <- ackNum
+		seqNum := <-c.currentSeqNum
+		c.currentSeqNum <- seqNum
+
+		if ackNum == seqNum {
+			break
+		}
+	}
+
+	return c.udpConn.Close()
 }
