@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/cmu440/lspnet"
-	"math"
 	"sort"
 )
 
@@ -148,7 +147,23 @@ func (c *client) ProcessMessage() {
 
 	} else if response.Type == MsgCAck {
 		// Handle CAck
+		ackNum := <-c.currentAckNum
+		ackNum = response.SeqNum
 
+		queue := <-c.ackQueue
+		ackedMsg := <-c.ackedMsg
+		var newQueue []Message
+		for i, msg := range queue {
+			if msg.SeqNum > response.SeqNum {
+				newQueue = queue[i:]
+				break
+			}
+			ackedMsg = append(ackedMsg, msg)
+		}
+		c.ackedMsg <- ackedMsg
+		c.ackQueue <- newQueue
+
+		c.currentAckNum <- ackNum
 	} else if response.Type == MsgData {
 		// Handle data
 	}
