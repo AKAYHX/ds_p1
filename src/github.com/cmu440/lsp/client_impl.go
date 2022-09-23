@@ -15,7 +15,7 @@ type client struct {
 	udpConn *lspnet.UDPConn
 	udpAddr *lspnet.UDPAddr
 	connID  int
-	closed chan bool
+	closed  chan bool
 	// Current sent seq num
 	currentSeqNum chan int
 	// Current ack-ed seq num
@@ -72,7 +72,7 @@ func NewClient(hostport string, initialSeqNum int, params *Params) (Client, erro
 			udpConn:       udpConn,
 			udpAddr:       addr,
 			connID:        response.ConnID,
-			closed: make(chan bool, 1),
+			closed:        make(chan bool, 1),
 			currentSeqNum: make(chan int, 1),
 			currentAckNum: make(chan int, 1),
 			ackedMsg:      make(chan []Message, 1), // TODO update to use pointer
@@ -95,7 +95,7 @@ func (c *client) ConnID() int {
 
 func (c *client) Read() ([]byte, error) {
 	// TODO: remove this line when you are ready to begin implementing this method.
-	closed := <- c.closed
+	closed := <-c.closed
 	c.closed <- closed
 	if closed {
 		return nil, nil
@@ -125,7 +125,7 @@ func (c *client) Read() ([]byte, error) {
 					}
 				}
 
-				ackNum := <- c.currentAckNum
+				ackNum := <-c.currentAckNum
 				ackNum = msg.SeqNum
 				c.currentAckNum <- ackNum
 				return msg.Payload, nil
@@ -205,7 +205,7 @@ func (c *client) AddAckedMsg(msg Message) {
 }
 
 func (c *client) Write(payload []byte) error {
-	closed := <- c.closed
+	closed := <-c.closed
 	c.closed <- closed
 	if closed {
 		return nil
@@ -225,7 +225,7 @@ func (c *client) Write(payload []byte) error {
 }
 
 func (c *client) Close() error {
-	closed := <- c.closed
+	closed := <-c.closed
 	if closed {
 		c.closed <- closed
 		return nil
@@ -235,7 +235,7 @@ func (c *client) Close() error {
 
 	// Block until all pending msg processed
 	for {
-		ackNum := <- c.currentAckNum
+		ackNum := <-c.currentAckNum
 		c.currentAckNum <- ackNum
 		seqNum := <-c.currentSeqNum
 		c.currentSeqNum <- seqNum
