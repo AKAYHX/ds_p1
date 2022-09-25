@@ -48,7 +48,7 @@ func NewClient(hostport string, initialSeqNum int, params *Params) (Client, erro
 	if err != nil {
 		return nil, err
 	}
-	udpConn, err := lspnet.ListenUDP("udp", addr)
+	udpConn, err := lspnet.DialUDP("udp", nil, addr)
 	if err != nil {
 		return nil, err
 	}
