@@ -3,11 +3,11 @@
 package lsp
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/cmu440/lspnet"
-	"sort"
 )
 
 const (
@@ -22,12 +22,14 @@ type client struct {
 	closed  chan bool
 	// Current sent seq num
 	currentSeqNum chan int
-	// Current ack-ed seq num
+	// Current processed seq num
 	currentAckNum chan int
-	// All ack-ed and ready to process msg
-	ackedMsg chan []Message
-	// All ack-ed but cannot be processed msg (sorted in order)
-	ackQueue chan []Message
+	// Current data msg
+	largestDataNum chan int
+	// Waited to be ack seq num (sorted in order)
+	ackQueue chan []int
+	// Waited to be process data message (sorted in order)
+	dataQueue chan []Message
 }
 
 // NewClient creates, initiates, and returns a new client. This function
@@ -58,14 +60,14 @@ func NewClient(hostport string, initialSeqNum int, params *Params) (Client, erro
 	if err != nil {
 		return nil, err
 	}
-	_, err = udpConn.WriteToUDP(request, addr)
+	_, err = udpConn.Write(request)
 	if err != nil {
 		return nil, err
 	}
 
 	buffer := make([]byte, MaxPacketSize)
 	var response Message
-	bytes, _, err := udpConn.ReadFromUDP(buffer)
+	bytes, err := udpConn.Read(buffer)
 	if err = json.Unmarshal(buffer[:bytes], &response); err != nil {
 		return nil, err
 	}
@@ -73,20 +75,25 @@ func NewClient(hostport string, initialSeqNum int, params *Params) (Client, erro
 	// Check if the connection is valid
 	if response.Type == MsgAck && response.SeqNum == initialSeqNum {
 		cli := &client{
-			udpConn:       udpConn,
-			udpAddr:       addr,
-			connID:        response.ConnID,
-			closed:        make(chan bool, 1),
-			currentSeqNum: make(chan int, 1),
-			currentAckNum: make(chan int, 1),
-			ackedMsg:      make(chan []Message, 1), // TODO update to use pointer
-			ackQueue:      make(chan []Message, 1),
+			udpConn:        udpConn,
+			udpAddr:        addr,
+			connID:         response.ConnID,
+			closed:         make(chan bool, 1),
+			currentSeqNum:  make(chan int, 1),
+			currentAckNum:  make(chan int, 1),
+			largestDataNum: make(chan int, 1),
+			ackQueue:       make(chan []int, 1),
+			dataQueue:      make(chan []Message, 1),
 		}
 		cli.closed <- false
 		cli.currentSeqNum <- initialSeqNum
 		cli.currentAckNum <- -1
-		cli.ackQueue <- []Message{}
-		cli.ackedMsg <- []Message{}
+		cli.largestDataNum <- -1
+		cli.ackQueue <- []int{}
+		cli.dataQueue <- []Message{}
+
+		go cli.handleMessage()
+
 		return cli, nil
 	}
 
@@ -105,107 +112,142 @@ func (c *client) Read() ([]byte, error) {
 		return nil, nil
 	}
 
-	go c.ProcessMessage()
-
 	for {
 		select {
-		case msgList := <-c.ackedMsg:
+		case msgList := <-c.dataQueue:
 			if len(msgList) == 0 {
-				c.ackedMsg <- msgList
+				c.dataQueue <- msgList
 			} else {
-				c.ackedMsg <- msgList[1:]
 				msg := msgList[0]
+				ackNum := <-c.currentAckNum
+				//str := ""
+				//for _, msg := range msgList {
+				//	str += msg.String()
+				//}
+				//fmt.Printf("------- %d %d list: %s\n",msg.SeqNum, ackNum, str)
 
-				if msg.Type == MsgData {
+				if ackNum >= 0 && msg.SeqNum-1 != ackNum {
+					c.dataQueue <- msgList
+				} else {
+					c.dataQueue <- msgList[1:]
+
 					// Ack the data
 					ack, err := json.Marshal(NewAck(c.connID, msg.SeqNum))
 					if err != nil {
 						return nil, err
 					}
 
-					_, err = c.udpConn.WriteToUDP(ack, c.udpAddr)
+					_, err = c.udpConn.Write(ack)
 					if err != nil {
 						return nil, err
 					}
+					ackNum = msg.SeqNum
 				}
-
-				ackNum := <-c.currentAckNum
-				ackNum = msg.SeqNum
 				c.currentAckNum <- ackNum
+
 				return msg.Payload, nil
 			}
 		}
 	}
 }
 
-func (c *client) ProcessMessage() {
+func (c *client) readMessage() Message {
 	buffer := make([]byte, MaxPacketSize)
 	var response Message
-	bytes, _, err := c.udpConn.ReadFromUDP(buffer)
+	bytes, err := bufio.NewReader(c.udpConn).Read(buffer)
 	if err = json.Unmarshal(buffer[:bytes], &response); err != nil {
 		_ = fmt.Errorf("cannot marshal")
-		return
-	}
-	if response.ConnID != c.connID {
+	} else if response.ConnID != c.connID {
 		_ = fmt.Errorf("incorrect conn id")
-		return
 	}
 
-	ackNum := <-c.currentAckNum
-	c.currentAckNum <- ackNum
-	if response.Type == MsgAck {
-		// Handle Ack
-		if ackNum == response.SeqNum-1 {
-			// Case 1: the message comes in order
-			c.AddAckedMsg(response)
-		} else {
-			// Case 2: the message comes out of order
-			queue := <-c.ackQueue
-			for i, msg := range queue {
-				if ackNum == msg.SeqNum-1 {
-					c.AddAckedMsg(msg)
-					queue[i] = response
-					break
-				}
-			}
-			// TODO can improve the performance by optimizing here
-			sort.Slice(queue, func(i, j int) bool {
-				return queue[i].SeqNum < queue[j].SeqNum
-			})
-			c.ackQueue <- queue
+	return response
+}
+
+func (c *client) handleMessage() {
+	for {
+		closed := <-c.closed
+		c.closed <- closed
+		if closed {
+			return
 		}
 
-	} else if response.Type == MsgCAck {
-		// Handle CAck
-		queue := <-c.ackQueue
-		ackedMsg := <-c.ackedMsg
-		var newQueue []Message
-		for i, msg := range queue {
-			if msg.SeqNum > response.SeqNum {
-				newQueue = queue[i:]
-				break
-			}
-			ackedMsg = append(ackedMsg, msg)
-		}
-		c.ackedMsg <- ackedMsg
-		c.ackQueue <- newQueue
+		message := c.readMessage()
 
-	} else if response.Type == MsgData {
-		// Handle data
-		if ackNum == response.SeqNum-1 {
-			c.AddAckedMsg(response)
-		} else {
-			queue := <-c.ackQueue
-			queue = append(queue, response)
-			c.ackQueue <- queue
+		if message.Type == MsgAck {
+			// Handle Ack
+			c.handleAckMsg(message)
+
+		} else if message.Type == MsgCAck {
+			// Handle CAck
+			c.handleCAckMsg(message)
+
+		} else if message.Type == MsgData {
+			// Handle data
+			c.handleDataMsg(message)
 		}
 	}
 }
 
-func (c *client) AddAckedMsg(msg Message) {
-	askedMsg := <-c.ackedMsg
-	askedMsg = append(askedMsg, msg)
-	c.ackedMsg <- askedMsg
+func (c *client) handleAckMsg(msg Message) {
+	queue := <-c.ackQueue
+	i := 0
+	for i < len(queue) {
+		if queue[i] == msg.SeqNum {
+			break
+		}
+		i++
+	}
+
+	// Remove acked seq num
+	queue = queue[:i]
+	if i < len(queue)-1 {
+		queue = append(queue, queue[i+1:]...)
+	}
+	c.ackQueue <- queue
+}
+
+func (c *client) handleCAckMsg(msg Message) {
+	queue := <-c.ackQueue
+	i := 0
+	for i < len(queue) {
+		if queue[i] == msg.SeqNum {
+			break
+		}
+		i++
+	}
+	if i < len(queue)-1 {
+		queue = queue[i+1:]
+	} else {
+		queue = []int{}
+	}
+	c.ackQueue <- queue
+}
+
+func (c *client) handleDataMsg(msg Message) {
+	queue := <-c.dataQueue
+	i := 0
+	for i < len(queue) {
+		if queue[i].SeqNum > msg.SeqNum {
+			break
+		}
+		i++
+	}
+
+	// Add the message to the process queue
+	newQueue := append(queue[:i], msg)
+	if i < len(queue)-1 {
+		newQueue = append(newQueue, queue[i:]...)
+	}
+	//str := ""
+	//for _, msg := range newQueue {
+	//	str += msg.String()
+	//}
+	//fmt.Printf("======== data msg list: %s\n", str)
+	c.dataQueue <- newQueue
+	dataNum := <-c.largestDataNum
+	dataNum = Max(dataNum, msg.SeqNum)
+	c.largestDataNum <- dataNum
 }
 
 func (c *client) Write(payload []byte) error {
@@ -224,7 +266,21 @@ func (c *client) Write(payload []byte) error {
 		return err
 	}
 
-	_, err = c.udpConn.WriteToUDP(message, c.udpAddr)
+	_, err = c.udpConn.Write(message)
+	queue := <-c.ackQueue
+	i := 0
+	for i < len(queue) {
+		if queue[i] > seqNum {
+			break
+		}
+		i++
+	}
+	newQueue := append(queue[:i], seqNum)
+	if i < len(queue) {
+		newQueue = append(newQueue, queue[i:]...)
+	}
+	c.ackQueue <- newQueue
+
 	return err
 }
 
@@ -239,15 +295,28 @@ func (c *client) Close() error {
 
 	// Block until all pending msg processed
 	for {
-		ackNum := <-c.currentAckNum
-		c.currentAckNum <- ackNum
-		seqNum := <-c.currentSeqNum
-		c.currentSeqNum <- seqNum
-
-		if ackNum == seqNum {
-			break
+		ackQueue := <-c.ackQueue
+		c.ackQueue <- ackQueue
+		if len(ackQueue) > 0 {
+			continue
 		}
+
+		largestDataNum := <-c.largestDataNum
+		c.largestDataNum <- largestDataNum
+		currentAckNum := <-c.currentAckNum
+		c.currentAckNum <- currentAckNum
+		if largestDataNum > currentAckNum {
+			continue
+		}
+		break
 	}
 
 	return c.udpConn.Close()
+}
+
+func Max(x int, y int) int {
+	if x > y {
+		return x
+	}
+	return y
 }
