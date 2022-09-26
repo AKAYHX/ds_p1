@@ -28,7 +28,15 @@ type server struct {
 	closeHandleWrite chan bool
 	closeConnect     chan bool
 	closeAck         chan bool
+	closeSeqNum      chan bool
+	closeMsg         chan bool
 	bufferChan       chan *serverClient
+	seqAdd           chan *serverClient
+	seqRead          chan *serverClient
+	seqRes           chan int
+	writeMsg         chan *writeClient
+	readMsg          chan *readClient
+	resMsg           chan *Message
 }
 
 type serverClient struct {
@@ -48,6 +56,17 @@ type Msg struct {
 type writeData struct {
 	connId  int
 	payload []byte
+}
+
+type readClient struct {
+	client *serverClient
+	seq    int
+}
+
+type writeClient struct {
+	client  *serverClient
+	seq     int
+	message *Message
 }
 
 // NewServer creates, initiates, and returns a new server. This function should
@@ -82,7 +101,15 @@ func NewServer(port int, params *Params) (Server, error) {
 		make(chan bool),
 		make(chan bool),
 		make(chan bool),
-		make(chan *serverClient)}
+		make(chan bool),
+		make(chan bool),
+		make(chan *serverClient),
+		make(chan *serverClient),
+		make(chan *serverClient),
+		make(chan int),
+		make(chan *writeClient),
+		make(chan *readClient),
+		make(chan *Message)}
 	go s.mainRoutine()
 	go s.readRoutine()
 	go s.writeRoutine()
@@ -90,6 +117,8 @@ func NewServer(port int, params *Params) (Server, error) {
 	go s.ackRoutine()
 	go s.bufferRoutine()
 	go s.handleWrite()
+	go s.seqNumRoutine()
+	go s.msgRoutine()
 	return s, nil
 }
 
@@ -110,12 +139,14 @@ func (s *server) mainRoutine() {
 				id := msg.message.ConnID
 				client := s.clients[id]
 				seq := msg.message.SeqNum
-				if seq == client.SeqNum+1 {
-					client.SeqNum += 1
+				s.seqRead <- client
+				currSeq := <-s.seqRes
+				if seq == currSeq+1 {
+					s.seqAdd <- client
 					s.outChan <- msg.message
 					s.bufferChan <- client
 				} else {
-					client.msgList[seq] = message
+					s.writeMsg <- &writeClient{client, seq, message}
 				}
 			}
 		case <-s.closeMain:
@@ -132,13 +163,47 @@ func (s *server) bufferRoutine() {
 			return
 		case client := <-s.bufferChan:
 			for {
-				message, ok := client.msgList[client.SeqNum+1]
-				if !ok {
+				s.seqRead <- client
+				currSeq := <-s.seqRes
+				s.readMsg <- &readClient{client, currSeq + 1}
+				message := <-s.resMsg
+				if message == nil {
 					break
 				}
 				s.outChan <- message
-				client.SeqNum += 1
+				s.seqAdd <- client
 			}
+		}
+	}
+}
+
+func (s *server) msgRoutine() {
+	for {
+		select {
+		case <-s.closeMsg:
+			return
+		case msg := <-s.writeMsg:
+			msg.client.msgList[msg.seq] = msg.message
+		case msg := <-s.readMsg:
+			message, ok := msg.client.msgList[msg.seq]
+			if !ok {
+				s.resMsg <- nil
+			} else {
+				s.resMsg <- message
+			}
+		}
+	}
+}
+
+func (s *server) seqNumRoutine() {
+	for {
+		select {
+		case <-s.closeSeqNum:
+			return
+		case client := <-s.seqAdd:
+			client.SeqNum += 1
+		case client := <-s.seqRead:
+			s.seqRes <- client.SeqNum
 		}
 	}
 }
@@ -185,12 +250,12 @@ func (s *server) readRoutine() {
 			buffer := make([]byte, Maxsize)
 			n, addr, err := s.conn.ReadFromUDP(buffer)
 			if err != nil {
-				//fmt.Println(err)
+				return
 			}
 			var message Message
 			err = json.Unmarshal(buffer[:n], &message)
 			if err != nil {
-				//fmt.Println(err)
+				return
 			}
 			msg := &Msg{addr, &message}
 			s.readChan <- msg
@@ -269,5 +334,7 @@ func (s *server) Close() error {
 	s.closeHandleWrite <- true
 	s.closeConnect <- true
 	s.closeAck <- true
+	s.closeSeqNum <- true
+	s.closeMsg <- true
 	return nil
 }
