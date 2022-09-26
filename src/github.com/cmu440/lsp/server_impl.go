@@ -4,7 +4,7 @@ package lsp
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
 	"github.com/cmu440/lspnet"
 	"strconv"
 )
@@ -98,7 +98,6 @@ func (s *server) mainRoutine() {
 		select {
 		case msg := <-s.readChan:
 			message := msg.message
-			fmt.Println(message)
 			switch message.Type {
 			case MsgConnect:
 				s.connectChan <- msg
@@ -132,11 +131,13 @@ func (s *server) bufferRoutine() {
 		case <-s.closeBuffer:
 			return
 		case client := <-s.bufferChan:
-			if message, ok := client.msgList[client.SeqNum+1]; ok {
+			for {
+				message, ok := client.msgList[client.SeqNum+1]
+				if !ok {
+					break
+				}
 				s.outChan <- message
 				client.SeqNum += 1
-			} else {
-				break
 			}
 		}
 	}
@@ -184,12 +185,12 @@ func (s *server) readRoutine() {
 			buffer := make([]byte, Maxsize)
 			n, addr, err := s.conn.ReadFromUDP(buffer)
 			if err != nil {
-				fmt.Println(err)
+				//fmt.Println(err)
 			}
 			var message Message
 			err = json.Unmarshal(buffer[:n], &message)
 			if err != nil {
-				fmt.Println(err)
+				//fmt.Println(err)
 			}
 			msg := &Msg{addr, &message}
 			s.readChan <- msg
@@ -224,7 +225,7 @@ func (s *server) writeRoutine() {
 		case msg := <-s.writeChan:
 			buffer, err := json.Marshal(msg.message)
 			if err != nil {
-				fmt.Println(err)
+				//fmt.Println(err)
 			}
 			s.conn.WriteToUDP(buffer, msg.addr)
 		case <-s.closeWrite:
@@ -242,12 +243,18 @@ func (s *server) Read() (int, []byte, error) {
 }
 
 func (s *server) Write(connId int, payload []byte) error {
+	if _, ok := s.clients[connId]; !ok {
+		return errors.New("connId does not exist")
+	}
 	data := &writeData{connId, payload}
 	s.preWriteChan <- data
 	return nil
 }
 
 func (s *server) CloseConn(connId int) error {
+	if _, ok := s.clients[connId]; !ok {
+		return errors.New("connId does not exist")
+	}
 	client := s.clients[connId]
 	client.closed = true
 	return nil
