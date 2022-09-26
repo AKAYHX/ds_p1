@@ -83,7 +83,7 @@ func NewClient(hostport string, initialSeqNum int, params *Params) (Client, erro
 			currentAckNum:  make(chan int, 1),
 			largestDataNum: make(chan int, 1),
 			ackQueue:       make(chan []int, 1),
-			readyDataMsg:      make(chan Message, 1),
+			readyDataMsg:   make(chan Message, 1),
 		}
 		cli.closed <- false
 		cli.currentSeqNum <- initialSeqNum
@@ -114,11 +114,11 @@ func (c *client) Read() ([]byte, error) {
 	for {
 		select {
 		case msg := <-c.readyDataMsg:
-				ackNum := <-c.currentAckNum
-					ackNum = msg.SeqNum
-					c.currentAckNum <- ackNum
+			ackNum := <-c.currentAckNum
+			ackNum = msg.SeqNum
+			c.currentAckNum <- ackNum
 
-					return msg.Payload, nil
+			return msg.Payload, nil
 		}
 	}
 }
@@ -205,7 +205,7 @@ func (c *client) handleDataMsg(msg Message) {
 		ackNum := <-c.currentAckNum
 		c.currentAckNum <- ackNum
 		if ackNum < 0 || msg.SeqNum-1 == ackNum {
-			c.readyDataMsg<-msg
+			c.readyDataMsg <- msg
 			break
 		}
 	}
