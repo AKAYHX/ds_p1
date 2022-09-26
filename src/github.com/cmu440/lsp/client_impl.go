@@ -28,8 +28,8 @@ type client struct {
 	largestDataNum chan int
 	// Waited to be ack seq num (sorted in order)
 	ackQueue chan []int
-	// Waited to be process data message (sorted in order)
-	dataQueue chan []Message
+	// Waited to be process data message
+	readyDataMsg chan Message
 }
 
 // NewClient creates, initiates, and returns a new client. This function
@@ -83,14 +83,13 @@ func NewClient(hostport string, initialSeqNum int, params *Params) (Client, erro
 			currentAckNum:  make(chan int, 1),
 			largestDataNum: make(chan int, 1),
 			ackQueue:       make(chan []int, 1),
-			dataQueue:      make(chan []Message, 1),
+			readyDataMsg:      make(chan Message, 1),
 		}
 		cli.closed <- false
 		cli.currentSeqNum <- initialSeqNum
 		cli.currentAckNum <- -1
 		cli.largestDataNum <- -1
 		cli.ackQueue <- []int{}
-		cli.dataQueue <- []Message{}
 
 		go cli.handleMessage()
 
@@ -114,24 +113,12 @@ func (c *client) Read() ([]byte, error) {
 
 	for {
 		select {
-		case msgList := <-c.dataQueue:
-			if len(msgList) == 0 {
-				c.dataQueue <- msgList
-			} else {
-				msg := msgList[0]
+		case msg := <-c.readyDataMsg:
 				ackNum := <-c.currentAckNum
-
-				if ackNum >= 0 && msg.SeqNum-1 != ackNum {
-					c.dataQueue <- msgList
-					c.currentAckNum <- ackNum
-				} else {
-					c.dataQueue <- msgList[1:]
 					ackNum = msg.SeqNum
 					c.currentAckNum <- ackNum
 
 					return msg.Payload, nil
-				}
-			}
 		}
 	}
 }
@@ -210,24 +197,18 @@ func (c *client) handleCAckMsg(msg Message) {
 }
 
 func (c *client) handleDataMsg(msg Message) {
-	queue := <-c.dataQueue
-	i := 0
-	for i < len(queue) {
-		if queue[i].SeqNum > msg.SeqNum {
-			break
-		}
-		i++
-	}
-
-	// Add the message to the process queue
-	newQueue := append(queue[:i], msg)
-	if i < len(queue)-1 {
-		newQueue = append(newQueue, queue[i:]...)
-	}
-	c.dataQueue <- newQueue
 	dataNum := <-c.largestDataNum
 	dataNum = Max(dataNum, msg.SeqNum)
 	c.largestDataNum <- dataNum
+
+	for {
+		ackNum := <-c.currentAckNum
+		c.currentAckNum <- ackNum
+		if ackNum < 0 || msg.SeqNum-1 == ackNum {
+			c.readyDataMsg<-msg
+			break
+		}
+	}
 
 	// Ack the data
 	ack, _ := json.Marshal(NewAck(c.connID, msg.SeqNum))
