@@ -120,32 +120,17 @@ func (c *client) Read() ([]byte, error) {
 			} else {
 				msg := msgList[0]
 				ackNum := <-c.currentAckNum
-				//str := ""
-				//for _, msg := range msgList {
-				//	str += msg.String()
-				//}
-				//fmt.Printf("------- %d %d list: %s\n",msg.SeqNum, ackNum, str)
 
 				if ackNum >= 0 && msg.SeqNum-1 != ackNum {
 					c.dataQueue <- msgList
+					c.currentAckNum <- ackNum
 				} else {
 					c.dataQueue <- msgList[1:]
-
-					// Ack the data
-					ack, err := json.Marshal(NewAck(c.connID, msg.SeqNum))
-					if err != nil {
-						return nil, err
-					}
-
-					_, err = c.udpConn.Write(ack)
-					if err != nil {
-						return nil, err
-					}
 					ackNum = msg.SeqNum
-				}
-				c.currentAckNum <- ackNum
+					c.currentAckNum <- ackNum
 
-				return msg.Payload, nil
+					return msg.Payload, nil
+				}
 			}
 		}
 	}
@@ -176,15 +161,15 @@ func (c *client) handleMessage() {
 
 		if message.Type == MsgAck {
 			// Handle Ack
-			c.handleAckMsg(message)
+			go c.handleAckMsg(message)
 
 		} else if message.Type == MsgCAck {
 			// Handle CAck
-			c.handleCAckMsg(message)
+			go c.handleCAckMsg(message)
 
 		} else if message.Type == MsgData {
 			// Handle data
-			c.handleDataMsg(message)
+			go c.handleDataMsg(message)
 		}
 	}
 }
@@ -239,15 +224,14 @@ func (c *client) handleDataMsg(msg Message) {
 	if i < len(queue)-1 {
 		newQueue = append(newQueue, queue[i:]...)
 	}
-	//str := ""
-	//for _, msg := range newQueue {
-	//	str += msg.String()
-	//}
-	//fmt.Printf("======== data msg list: %s\n", str)
 	c.dataQueue <- newQueue
 	dataNum := <-c.largestDataNum
 	dataNum = Max(dataNum, msg.SeqNum)
 	c.largestDataNum <- dataNum
+
+	// Ack the data
+	ack, _ := json.Marshal(NewAck(c.connID, msg.SeqNum))
+	c.udpConn.Write(ack)
 }
 
 func (c *client) Write(payload []byte) error {
