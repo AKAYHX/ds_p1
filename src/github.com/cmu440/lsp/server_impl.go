@@ -231,7 +231,7 @@ func (s *server) unAckRoutine() {
 				if len(client.unAcked) == 0 {
 					if len(client.buffer) > 0 {
 						//fmt.Println("wait11")
-						client.left = client.buffer[0].message.SeqNum
+						client.left = client.buffer[0].message.SeqNum - 1
 						//fmt.Println("wait11 done")
 					} else {
 						//fmt.Println("wait12")
@@ -246,11 +246,13 @@ func (s *server) unAckRoutine() {
 					//fmt.Println("wait13 done")
 				}
 				left := client.left
-				if len(client.buffer) > 0 && len(client.unAcked) < s.MaxUnackedMessages && left+s.WindowSize >= client.buffer[0].message.SeqNum {
-					//fmt.Println("tobuff")
-					s.writeChan <- client.buffer[0]
-					client.buffer = client.buffer[1:]
-					//fmt.Println("buffclear")
+				for {
+					if len(client.buffer) > 0 && len(client.unAcked) < s.MaxUnackedMessages && left+s.WindowSize >= client.buffer[0].message.SeqNum {
+						s.writeChan <- client.buffer[0]
+						client.buffer = client.buffer[1:]
+					} else {
+						break
+					}
 				}
 				//fmt.Println("wait2 done")
 			} else {
