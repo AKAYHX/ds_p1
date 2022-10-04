@@ -48,7 +48,7 @@ type server struct {
 	serverseqRes       chan int
 	clientWinReq       chan *clientWindow
 	clientWinRes       chan int
-	unAck              chan bool
+	unAckReq           chan *unAckMsg
 }
 
 type serverClient struct {
@@ -87,6 +87,12 @@ type writeClient struct {
 type clientWindow struct {
 	client *serverClient
 	num    int
+}
+
+type unAckMsg struct {
+	client  *serverClient
+	seq     int
+	message *Message
 }
 
 // NewServer creates, initiates, and returns a new server. This function should
@@ -141,7 +147,7 @@ func NewServer(port int, params *Params) (Server, error) {
 		make(chan int),
 		make(chan *clientWindow),
 		make(chan int),
-		make(chan bool, 1),
+		make(chan *unAckMsg),
 	}
 	go s.mainRoutine()
 	go s.readRoutine()
@@ -151,15 +157,14 @@ func NewServer(port int, params *Params) (Server, error) {
 	go s.bufferRoutine()
 	go s.seqNumRoutine()
 	go s.msgRoutine()
-	go s.clientBufferRoutine()
 	go s.handleWrite()
 	go s.windowLeft()
+	go s.unAckRoutine()
 	return s, nil
 }
 
 func (s *server) mainRoutine() {
 	for {
-		//fmt.Println(len(s.readChan), len(s.preWriteChan), len(s.clientBuffer))
 		select {
 		case msg := <-s.readChan:
 			//fmt.Println("readchan")
@@ -171,32 +176,7 @@ func (s *server) mainRoutine() {
 				s.connectChan <- msg
 			case MsgAck, MsgCAck:
 				//fmt.Println("2")
-				s.unAck <- true
-				//fmt.Println(len(client.unAcked))
-				for i := 0; i < len(client.unAcked); i++ {
-					//fmt.Println(i)
-					if client.unAcked[i].SeqNum == message.SeqNum {
-						//fmt.Println("!!")
-						client.unAcked = append(client.unAcked[:i], client.unAcked[i+1:]...)
-						//fmt.Println("callbuff")
-						break
-					}
-				}
-				//fmt.Println("x")
-				if len(client.unAcked) == 0 {
-					if len(client.buffer) > 0 {
-						s.clientWinReq <- &clientWindow{client, client.buffer[0].message.SeqNum}
-					} else {
-						s.serverseqRead <- client
-						num := <-s.serverseqRes
-						s.clientWinReq <- &clientWindow{client, num}
-					}
-				} else {
-					s.clientWinReq <- &clientWindow{client, client.unAcked[0].SeqNum}
-				}
-				//fmt.Println("xx")
-				<-s.unAck
-				s.clientBuffer <- id
+				s.unAckReq <- &unAckMsg{client, -1, message}
 				//fmt.Println("222")
 			case MsgData:
 				s.ackChan <- msg
@@ -213,6 +193,72 @@ func (s *server) mainRoutine() {
 			}
 		case <-s.closeMain:
 			return
+		}
+	}
+}
+
+func (s *server) unAckRoutine() {
+	for {
+		select {
+		case req := <-s.unAckReq:
+			client := req.client
+			seq := req.seq
+			message := req.message
+			//
+			if seq == -1 {
+				for i := 0; i < len(client.unAcked); i++ {
+					//fmt.Println(i)
+					if client.unAcked[i].SeqNum == message.SeqNum {
+						//fmt.Println("!!")
+						client.unAcked = append(client.unAcked[:i], client.unAcked[i+1:]...)
+						//fmt.Println("callbuff")
+						break
+					}
+				}
+				//fmt.Println("wait1")
+				if len(client.unAcked) == 0 {
+					if len(client.buffer) > 0 {
+						//fmt.Println("wait11")
+						s.clientWinReq <- &clientWindow{client, client.buffer[0].message.SeqNum}
+						//fmt.Println("wait11 done")
+					} else {
+						//fmt.Println("wait12")
+						s.serverseqRead <- client
+						num := <-s.serverseqRes
+						s.clientWinReq <- &clientWindow{client, num}
+						//fmt.Println("wait12 done")
+					}
+				} else {
+					//fmt.Println("wait13")
+					s.clientWinReq <- &clientWindow{client, client.unAcked[0].SeqNum}
+					//fmt.Println("wait13 done")
+				}
+				s.clientWinReq <- &clientWindow{client, -1}
+				left := <-s.clientWinRes
+				if len(client.buffer) > 0 && len(client.unAcked) < s.MaxUnackedMessages && left+s.WindowSize >= client.buffer[0].message.SeqNum {
+					//fmt.Println("tobuff")
+					s.writeChan <- client.buffer[0]
+					client.buffer = client.buffer[1:]
+					//fmt.Println("buffclear")
+				}
+				//fmt.Println("wait2 done")
+			} else {
+				//fmt.Println("wait3")
+				s.clientWinReq <- &clientWindow{client, -1}
+				left := <-s.clientWinRes
+				msg := &Msg{client.addr, message}
+				//fmt.Println(client.addr, len(client.unAcked), s.MaxUnackedMessages, left, s.WindowSize, seq)
+				if len(client.unAcked) < s.MaxUnackedMessages && left+s.WindowSize >= seq {
+					//fmt.Println("towrite")
+					client.unAcked = append(client.unAcked, message)
+					s.writeChan <- msg
+					//fmt.Println("wrote")
+				} else {
+					//fmt.Println("tobuff")
+					client.buffer = append(client.buffer, msg)
+				}
+				//fmt.Println("wait3 done")
+			}
 		}
 	}
 }
@@ -242,47 +288,7 @@ func (s *server) handleWrite() {
 			size := len(writedata.payload)
 			sum := CalculateChecksum(connId, SeqNum, size, payload)
 			message := NewData(connId, SeqNum, size, payload, sum)
-			msg := &Msg{client.addr, message}
-			s.clientWinReq <- &clientWindow{client, -1}
-			left := <-s.clientWinRes
-			//fmt.Println("3")
-			s.unAck <- true
-			//fmt.Println("33")
-			if len(client.unAcked) < s.MaxUnackedMessages && left+s.WindowSize >= SeqNum {
-				//fmt.Println("towrite")
-				client.unAcked = append(client.unAcked, message)
-				s.writeChan <- msg
-				//fmt.Println("wrote")
-			} else {
-				//fmt.Println("tobuff")
-				client.buffer = append(client.buffer, msg)
-			}
-			<-s.unAck
-			//fmt.Println("333")
-		}
-	}
-}
-
-func (s *server) clientBufferRoutine() {
-	for {
-		select {
-		case id := <-s.clientBuffer:
-			client := s.clients[id]
-			s.clientWinReq <- &clientWindow{client, -1}
-			left := <-s.clientWinRes
-			//fmt.Println("4")
-			s.unAck <- true
-			//fmt.Println("44")
-			if len(client.buffer) > 0 && len(client.unAcked) < s.MaxUnackedMessages && left+s.WindowSize > client.buffer[0].message.SeqNum {
-				//fmt.Println("tobuff")
-				s.writeChan <- client.buffer[0]
-				client.buffer = client.buffer[1:]
-				//fmt.Println("buffclear")
-			}
-			<-s.unAck
-			//fmt.Println("444")
-		case <-s.closeClientBuff:
-			return
+			s.unAckReq <- &unAckMsg{client, SeqNum, message}
 		}
 	}
 }
@@ -408,7 +414,7 @@ func (s *server) writeRoutine() {
 	for {
 		select {
 		case msg := <-s.writeChan:
-			//fmt.Println(msg.message.Type)
+			// fmt.Println(msg.addr, msg.message.Payload)
 			buffer, err := json.Marshal(msg.message)
 			if err != nil {
 				continue
