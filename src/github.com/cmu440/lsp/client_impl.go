@@ -150,19 +150,24 @@ func (c *client) ConnID() int {
 }
 
 func (c *client) Read() ([]byte, error) {
-	closed := <-c.closed
-	c.closed <- closed
-	if closed {
-		return nil, nil
-	}
 	for {
 		select {
 		case msg := <-c.readyDataMsg:
+			checksum := CalculateChecksum(c.connID, msg.SeqNum, msg.Size, msg.Payload)
+			if checksum != msg.Checksum {
+				return nil, nil
+			}
+
 			ackNum := <-c.currentProcessedMsgSeqNum
 			ackNum = msg.SeqNum
 			c.currentProcessedMsgSeqNum <- ackNum
-
 			return msg.Payload, nil
+
+		case closed := <-c.closed:
+			c.closed <- closed
+			if closed {
+				return nil, nil
+			}
 		}
 	}
 }
@@ -257,7 +262,7 @@ func (c *client) Write(payload []byte) error {
 	seqNum++
 	c.currentSeqNum <- seqNum
 
-	go c.writeMessage(NewData(c.connID, seqNum, len(payload), payload, 0))
+	c.writeMessage(NewData(c.connID, seqNum, len(payload), payload, CalculateChecksum(c.connID, seqNum, len(payload), payload)))
 
 	return nil
 }
@@ -274,8 +279,25 @@ func (c *client) handleResendMessage() {
 				resendQueueList = resendQueueList[1:]
 			}
 			c.resendQueueList <- resendQueueList
+
+			//var nonAckResendQueue []*Message
+			//nonAckMsgMap := <-c.nonAckMsgMap
+			//c.nonAckMsgMap <- nonAckMsgMap
+			//for _, seqNum := range resendQueue {
+			//	if msg, found := nonAckMsgMap[seqNum]; found {
+			//		nonAckResendQueue = append(nonAckResendQueue, msg.message)
+			//	}
+			//}
+			//if len(nonAckResendQueue) > 0 {
+			//	go func(queue []*Message) {
+			//		fmt.Println("======= resendddddddd")
+			//		for _, msg := range queue {
+			//			c.writeMessage(msg)
+			//		}
+			//	}(nonAckResendQueue)
+			//}
 			if len(resendQueue) > 0 {
-				go c.processResendMessageQueue(resendQueue)
+				c.processResendMessageQueue(resendQueue)
 			}
 		case closed := <-c.closed:
 			c.closed <- closed
