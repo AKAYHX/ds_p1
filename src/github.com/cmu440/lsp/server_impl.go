@@ -42,13 +42,14 @@ type server struct {
 	MaxBackOffInterval int
 	MaxUnackedMessages int
 	clientBuffer       chan int
-	closeClientBuff    chan bool
+	closeunAckRoutine  chan bool
 	serverseqAdd       chan *serverClient
 	serverseqRead      chan *serverClient
 	serverseqRes       chan int
 	clientWinReq       chan *clientWindow
 	clientWinRes       chan int
 	unAckReq           chan *unAckMsg
+	closehandleWrite   chan bool
 }
 
 type serverClient struct {
@@ -148,17 +149,16 @@ func NewServer(port int, params *Params) (Server, error) {
 		make(chan *clientWindow),
 		make(chan int),
 		make(chan *unAckMsg),
+		make(chan bool),
 	}
 	go s.mainRoutine()
 	go s.readRoutine()
 	go s.writeRoutine()
 	go s.connectRoutine()
 	go s.ackRoutine()
-	go s.bufferRoutine()
 	go s.seqNumRoutine()
 	go s.msgRoutine()
 	go s.handleWrite()
-	go s.windowLeft()
 	go s.unAckRoutine()
 	return s, nil
 }
@@ -186,7 +186,17 @@ func (s *server) mainRoutine() {
 				if seq == currSeq+1 {
 					s.seqAdd <- client
 					s.outChan <- msg.message
-					s.bufferChan <- client
+					for {
+						s.seqRead <- client
+						currSeq := <-s.seqRes
+						s.readMsg <- &readClient{client, currSeq + 1}
+						message := <-s.resMsg
+						if message == nil {
+							break
+						}
+						s.outChan <- message
+						s.seqAdd <- client
+					}
 				} else {
 					s.writeMsg <- &writeClient{client, seq, message}
 				}
@@ -197,14 +207,16 @@ func (s *server) mainRoutine() {
 	}
 }
 
+//for sliding window
 func (s *server) unAckRoutine() {
 	for {
 		select {
+		case <-s.closeunAckRoutine:
+			return
 		case req := <-s.unAckReq:
 			client := req.client
 			seq := req.seq
 			message := req.message
-			//
 			if seq == -1 {
 				for i := 0; i < len(client.unAcked); i++ {
 					//fmt.Println(i)
@@ -219,22 +231,21 @@ func (s *server) unAckRoutine() {
 				if len(client.unAcked) == 0 {
 					if len(client.buffer) > 0 {
 						//fmt.Println("wait11")
-						s.clientWinReq <- &clientWindow{client, client.buffer[0].message.SeqNum}
+						client.left = client.buffer[0].message.SeqNum
 						//fmt.Println("wait11 done")
 					} else {
 						//fmt.Println("wait12")
 						s.serverseqRead <- client
 						num := <-s.serverseqRes
-						s.clientWinReq <- &clientWindow{client, num}
+						client.left = num
 						//fmt.Println("wait12 done")
 					}
 				} else {
 					//fmt.Println("wait13")
-					s.clientWinReq <- &clientWindow{client, client.unAcked[0].SeqNum}
+					client.left = client.unAcked[0].SeqNum
 					//fmt.Println("wait13 done")
 				}
-				s.clientWinReq <- &clientWindow{client, -1}
-				left := <-s.clientWinRes
+				left := client.left
 				if len(client.buffer) > 0 && len(client.unAcked) < s.MaxUnackedMessages && left+s.WindowSize >= client.buffer[0].message.SeqNum {
 					//fmt.Println("tobuff")
 					s.writeChan <- client.buffer[0]
@@ -244,8 +255,7 @@ func (s *server) unAckRoutine() {
 				//fmt.Println("wait2 done")
 			} else {
 				//fmt.Println("wait3")
-				s.clientWinReq <- &clientWindow{client, -1}
-				left := <-s.clientWinRes
+				left := client.left
 				msg := &Msg{client.addr, message}
 				//fmt.Println(client.addr, len(client.unAcked), s.MaxUnackedMessages, left, s.WindowSize, seq)
 				if len(client.unAcked) < s.MaxUnackedMessages && left+s.WindowSize >= seq {
@@ -263,22 +273,11 @@ func (s *server) unAckRoutine() {
 	}
 }
 
-func (s *server) windowLeft() {
-	for {
-		select {
-		case win := <-s.clientWinReq:
-			if win.num == -1 {
-				s.clientWinRes <- win.client.left
-			} else {
-				win.client.left = win.num
-			}
-		}
-	}
-}
-
 func (s *server) handleWrite() {
 	for {
 		select {
+		case <-s.closehandleWrite:
+			return
 		case writedata := <-s.preWriteChan:
 			connId := writedata.connId
 			payload := writedata.payload
@@ -289,27 +288,6 @@ func (s *server) handleWrite() {
 			sum := CalculateChecksum(connId, SeqNum, size, payload)
 			message := NewData(connId, SeqNum, size, payload, sum)
 			s.unAckReq <- &unAckMsg{client, SeqNum, message}
-		}
-	}
-}
-
-func (s *server) bufferRoutine() {
-	for {
-		select {
-		case <-s.closeBuffer:
-			return
-		case client := <-s.bufferChan:
-			for {
-				s.seqRead <- client
-				currSeq := <-s.seqRes
-				s.readMsg <- &readClient{client, currSeq + 1}
-				message := <-s.resMsg
-				if message == nil {
-					break
-				}
-				s.outChan <- message
-				s.seqAdd <- client
-			}
 		}
 	}
 }
@@ -462,6 +440,7 @@ func (s *server) Close() error {
 	s.closeAck <- true
 	s.closeSeqNum <- true
 	s.closeMsg <- true
-	s.closeClientBuff <- true
+	s.closeunAckRoutine <- true
+	s.closehandleWrite <- true
 	return nil
 }
