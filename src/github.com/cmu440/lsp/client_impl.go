@@ -13,6 +13,7 @@ import (
 
 const (
 	MaxPacketSize = 1000
+	MilliToNano   = 1000000
 )
 
 type client struct {
@@ -38,6 +39,12 @@ type client struct {
 	nonAckMsgMap chan map[int]*ClientMessage
 	// Signal of the availability within the sliding window
 	openSlidingMsgWindow chan int
+	// Check if there is at least one message being sent in the current epoch
+	activeEpoch chan int
+	// Check the epoch since last message from the server
+	idleEpoch chan int
+	// Stop the client immediately rather than waiting the pending messages to be finished
+	immediateStop chan bool
 }
 
 type ClientMessage struct {
@@ -81,7 +88,10 @@ func NewClient(hostport string, initialSeqNum int, params *Params) (Client, erro
 		epochTimeout:              make(chan bool, 1),
 		resendQueueList:           make(chan [][]int, 1),
 		nonAckMsgMap:              make(chan map[int]*ClientMessage, 1),
-		openSlidingMsgWindow: make(chan int, params.WindowSize),
+		openSlidingMsgWindow:      make(chan int, params.WindowSize),
+		activeEpoch:               make(chan int, 1),
+		idleEpoch:                 make(chan int, 1),
+		immediateStop:             make(chan bool, 1),
 	}
 	cli.closed <- false
 	cli.currentSeqNum <- initialSeqNum
@@ -90,8 +100,9 @@ func NewClient(hostport string, initialSeqNum int, params *Params) (Client, erro
 	cli.resendQueueList <- [][]int{}
 	cli.nonAckMsgMap <- make(map[int]*ClientMessage)
 	cli.epochTimeout <- true
-
-	go cli.epochTimer()
+	cli.immediateStop <- false
+	cli.activeEpoch <- 0
+	cli.idleEpoch <- 0
 
 	backoff := 0
 	for {
@@ -99,6 +110,7 @@ func NewClient(hostport string, initialSeqNum int, params *Params) (Client, erro
 		if cli.setupConnection(initialSeqNum) {
 			go cli.handleMessage()
 			go cli.handleResendMessage()
+			go cli.epochTimer()
 
 			return cli, nil
 		}
@@ -143,9 +155,50 @@ func (c *client) epochTimer() {
 			return
 		}
 
-		time.After(time.Duration(c.params.EpochMillis))
-		c.epochTimeout <- true
+		select {
+		case <-time.After(time.Duration(MilliToNano * c.params.EpochMillis)):
+			c.epochTimeout <- true
+
+			go func() {
+				select {
+				case active := <-c.activeEpoch:
+					c.activeEpoch <- 0
+					if active == 0 {
+						c.sendHeartBeat()
+					}
+				}
+
+				select {
+				case idleEpoch := <-c.idleEpoch:
+					if idleEpoch < 0 {
+						// At least one msg received
+						c.idleEpoch <- 0
+					} else {
+						// No message from the server in this epoch
+						c.idleEpoch <- idleEpoch + 1
+					}
+					if idleEpoch+1 >= c.params.EpochLimit {
+						<-c.immediateStop
+						c.immediateStop <- true
+						<-c.closed
+						c.closed <- true
+						return
+					}
+				}
+			}()
+		}
 	}
+}
+
+func (c *client) sendHeartBeat() {
+	ack, _ := json.Marshal(NewAck(c.connID, 0))
+
+	immediateStop := <-c.immediateStop
+	c.immediateStop <- immediateStop
+	if immediateStop {
+		return
+	}
+	c.udpConn.Write(ack)
 }
 
 func (c *client) ConnID() int {
@@ -153,37 +206,45 @@ func (c *client) ConnID() int {
 }
 
 func (c *client) Read() ([]byte, error) {
+	closed := <-c.closed
+	c.closed <- closed
+	if closed {
+		return nil, nil
+	}
+
 	for {
 		select {
 		case msg := <-c.readyDataMsg:
-			checksum := CalculateChecksum(c.connID, msg.SeqNum, msg.Size, msg.Payload)
-			if checksum != msg.Checksum {
-				return nil, nil
-			}
-
 			ackNum := <-c.currentProcessedMsgSeqNum
 			ackNum = msg.SeqNum
 			c.currentProcessedMsgSeqNum <- ackNum
 			return msg.Payload, nil
-
-		case closed := <-c.closed:
-			c.closed <- closed
-			if closed {
-				return nil, nil
-			}
 		}
 	}
 }
 
 func (c *client) readMessage() Message {
-	buffer := make([]byte, MaxPacketSize)
 	var response Message
+
+	immediateStop := <-c.immediateStop
+	c.immediateStop <- immediateStop
+	if immediateStop {
+		return response
+	}
+
+	buffer := make([]byte, MaxPacketSize)
 	bytes, err := bufio.NewReader(c.udpConn).Read(buffer)
+
 	if err = json.Unmarshal(buffer[:bytes], &response); err != nil {
 		fmt.Println("cannot marshal")
 	} else if response.ConnID != c.connID {
 		fmt.Println("incorrect conn id")
 	}
+
+	// Received at least one message from the server
+	idleEpoch := <-c.idleEpoch
+	idleEpoch = -1
+	c.idleEpoch <- idleEpoch
 
 	return response
 }
@@ -214,11 +275,14 @@ func (c *client) handleMessage() {
 
 func (c *client) handleAckMsg(message Message) {
 	nonAckMsgMap := <-c.nonAckMsgMap
-	delete(nonAckMsgMap, message.SeqNum)
-	select {
-	case <-c.openSlidingMsgWindow:
-	default:
+	if _, found := nonAckMsgMap[message.SeqNum]; found {
+		delete(nonAckMsgMap, message.SeqNum)
+		select {
+		case <-c.openSlidingMsgWindow:
+		default:
+		}
 	}
+
 	c.nonAckMsgMap <- nonAckMsgMap
 }
 
@@ -253,6 +317,11 @@ func (c *client) handleDataMsg(msg Message) {
 	}
 
 	// Ack the data
+	immediateStop := <-c.immediateStop
+	c.immediateStop <- immediateStop
+	if immediateStop {
+		return
+	}
 	ack, _ := json.Marshal(NewAck(c.connID, msg.SeqNum))
 	c.udpConn.Write(ack)
 }
@@ -279,6 +348,12 @@ func (c *client) Write(payload []byte) error {
 
 func (c *client) handleResendMessage() {
 	for {
+		immediateStop := <-c.immediateStop
+		c.immediateStop <- immediateStop
+		if immediateStop {
+			return
+		}
+
 		select {
 		case <-c.epochTimeout:
 			// Pull the first resendQueue to resend
@@ -290,28 +365,8 @@ func (c *client) handleResendMessage() {
 			}
 			c.resendQueueList <- resendQueueList
 
-			//var nonAckResendQueue []*Message
-			//nonAckMsgMap := <-c.nonAckMsgMap
-			//c.nonAckMsgMap <- nonAckMsgMap
-			//for _, seqNum := range resendQueue {
-			//	if msg, found := nonAckMsgMap[seqNum]; found {
-			//		nonAckResendQueue = append(nonAckResendQueue, msg.message)
-			//	}
-			//}
-			//if len(nonAckResendQueue) > 0 {
-			//	go func(queue []*Message) {
-			//		for _, msg := range queue {
-			//			c.writeMessage(msg)
-			//		}
-			//	}(nonAckResendQueue)
-			//}
 			if len(resendQueue) > 0 {
 				c.processResendMessageQueue(resendQueue)
-			}
-		case closed := <-c.closed:
-			c.closed <- closed
-			if closed {
-				return
 			}
 		}
 	}
@@ -335,6 +390,17 @@ func (c *client) writeMessage(message *Message) {
 		case c.openSlidingMsgWindow <- 1:
 		}
 	}
+
+	immediateStop := <-c.immediateStop
+	c.immediateStop <- immediateStop
+	if immediateStop {
+		return
+	}
+
+	active := <-c.activeEpoch
+	active = 1
+	c.activeEpoch <- active
+
 	marshaledMsg, _ := json.Marshal(*message)
 	c.udpConn.Write(marshaledMsg)
 	c.updateBackoffEpoch(message)
@@ -417,5 +483,4 @@ func Max(x int, y int) int {
 	return y
 }
 
-// TODO heartbeat
-// TODO sliding window
+// TODO MaxUnackedMessages
