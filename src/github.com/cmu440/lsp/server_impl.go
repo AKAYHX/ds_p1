@@ -456,13 +456,13 @@ func (s *server) writeRoutine() {
 	for {
 		select {
 		case msg := <-s.writeChan:
+			client := s.clients[msg.message.ConnID]
 			// fmt.Println(msg.addr, msg.message.Payload)
 			buffer, err := json.Marshal(msg.message)
 			if err != nil {
 				continue
 			}
 			s.conn.WriteToUDP(buffer, msg.addr)
-			client := s.clients[msg.message.ConnID]
 			//fmt.Println(msg.message.ConnID)
 			client.sent = true
 		case <-s.closeWrite:
