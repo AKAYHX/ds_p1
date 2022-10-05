@@ -36,6 +36,8 @@ type client struct {
 	resendQueueList chan [][]int
 	// Map of non-acked message {seq num: message}
 	nonAckMsgMap chan map[int]*ClientMessage
+	// Signal of the availability within the sliding window
+	openSlidingMsgWindow chan int
 }
 
 type ClientMessage struct {
@@ -79,6 +81,7 @@ func NewClient(hostport string, initialSeqNum int, params *Params) (Client, erro
 		epochTimeout:              make(chan bool, 1),
 		resendQueueList:           make(chan [][]int, 1),
 		nonAckMsgMap:              make(chan map[int]*ClientMessage, 1),
+		openSlidingMsgWindow: make(chan int, params.WindowSize),
 	}
 	cli.closed <- false
 	cli.currentSeqNum <- initialSeqNum
@@ -209,10 +212,13 @@ func (c *client) handleMessage() {
 	}
 }
 
-func (c *client) handleAckMsg(msg Message) {
+func (c *client) handleAckMsg(message Message) {
 	nonAckMsgMap := <-c.nonAckMsgMap
-	delete(nonAckMsgMap, msg.SeqNum)
-
+	delete(nonAckMsgMap, message.SeqNum)
+	select {
+	case <-c.openSlidingMsgWindow:
+	default:
+	}
 	c.nonAckMsgMap <- nonAckMsgMap
 }
 
@@ -221,6 +227,10 @@ func (c *client) handleCAckMsg(msg Message) {
 	for seqNum := range nonAckMsgMap {
 		if seqNum < msg.SeqNum {
 			delete(nonAckMsgMap, seqNum)
+			select {
+			case <-c.openSlidingMsgWindow:
+			default:
+			}
 		}
 	}
 
@@ -262,7 +272,7 @@ func (c *client) Write(payload []byte) error {
 	seqNum++
 	c.currentSeqNum <- seqNum
 
-	c.writeMessage(NewData(c.connID, seqNum, len(payload), payload, CalculateChecksum(c.connID, seqNum, len(payload), payload)))
+	go c.writeMessage(NewData(c.connID, seqNum, len(payload), payload, CalculateChecksum(c.connID, seqNum, len(payload), payload)))
 
 	return nil
 }
@@ -290,7 +300,6 @@ func (c *client) handleResendMessage() {
 			//}
 			//if len(nonAckResendQueue) > 0 {
 			//	go func(queue []*Message) {
-			//		fmt.Println("======= resendddddddd")
 			//		for _, msg := range queue {
 			//			c.writeMessage(msg)
 			//		}
@@ -319,6 +328,13 @@ func (c *client) processResendMessageQueue(resendQueue []int) {
 }
 
 func (c *client) writeMessage(message *Message) {
+	nonAckMsgMap := <-c.nonAckMsgMap
+	c.nonAckMsgMap <- nonAckMsgMap
+	if _, found := nonAckMsgMap[message.SeqNum]; !found {
+		select {
+		case c.openSlidingMsgWindow <- 1:
+		}
+	}
 	marshaledMsg, _ := json.Marshal(*message)
 	c.udpConn.Write(marshaledMsg)
 	c.updateBackoffEpoch(message)
@@ -337,7 +353,15 @@ func (c *client) updateBackoffEpoch(msg *Message) {
 		backoff = message.backoff
 		message.backoff *= 2
 	}
-	nonAckMsgMap[msg.SeqNum] = message
+	if backoff > c.params.MaxBackOffInterval {
+		delete(nonAckMsgMap, msg.SeqNum)
+		select {
+		case <-c.openSlidingMsgWindow:
+		default:
+		}
+	} else {
+		nonAckMsgMap[msg.SeqNum] = message
+	}
 	c.nonAckMsgMap <- nonAckMsgMap
 
 	// Put the message into resend queue
@@ -393,6 +417,5 @@ func Max(x int, y int) int {
 	return y
 }
 
-// TODO checksum
 // TODO heartbeat
 // TODO sliding window
