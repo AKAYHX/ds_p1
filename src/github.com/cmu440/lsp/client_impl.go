@@ -7,9 +7,9 @@ Sliding Window design:
 					not full -> update(nonAckMsgMap)
 								-> len(nonAckMsgMap) > MaxUnackedMessages -> block
 									-> update nonAckMsgMap, append(slidingWindow)
-	receiving ack: if current ack.seq == slidingWindow[0] -> update nonAckMsgMap,
-															while (slidingWindow[0] not in nonAckMsgMap) {poll(openSlidingMsgWindow), slidingWindow[1:]}
-						-> update nonAckMsgMap
+	receiving ack: update nonAckMsgMap,
+					while (slidingWindow[0] not in nonAckMsgMap)
+						{poll(openSlidingMsgWindow), slidingWindow[1:]}
 */
 
 package lsp
