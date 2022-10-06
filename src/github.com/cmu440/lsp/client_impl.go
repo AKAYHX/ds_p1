@@ -82,18 +82,7 @@ type ClientMessage struct {
 // hostport is a colon-separated string identifying the server's host address
 // and port number (i.e., "localhost:9999").
 func NewClient(hostport string, initialSeqNum int, params *Params) (Client, error) {
-	addr, err := lspnet.ResolveUDPAddr("udp", hostport)
-	if err != nil {
-		return nil, err
-	}
-	udpConn, err := lspnet.DialUDP("udp", nil, addr)
-	if err != nil {
-		return nil, err
-	}
-
 	cli := &client{
-		udpConn:                   udpConn,
-		udpAddr:                   addr,
 		connID:                    0,
 		params:                    params,
 		closed:                    make(chan bool, 1),
@@ -123,28 +112,41 @@ func NewClient(hostport string, initialSeqNum int, params *Params) (Client, erro
 	cli.idleEpoch <- 0
 	cli.slidingWindow <- []int{}
 
-	backoff := 0
+	epoch := 0
 	for {
 		// Send connect message
-		if cli.setupConnection(initialSeqNum) {
+		if cli.setupConnection(initialSeqNum, hostport) {
 			go cli.handleMessage()
 			go cli.handleResendMessage()
 			go cli.epochTimer()
 
 			return cli, nil
 		}
-		backoff++
-		if backoff > cli.params.MaxBackOffInterval {
+		epoch++
+		if epoch > cli.params.EpochLimit {
 			break
 		}
 
 		// Wait for one epoch to resend
-		time.After(time.Duration(cli.params.EpochMillis))
+		select {
+		case <-time.After(time.Duration(MilliToNano * params.EpochMillis)):
+		}
 	}
 	return nil, errors.New("exceed MaxBackOffInterval")
 }
 
-func (c *client) setupConnection(initialSeqNum int) bool {
+func (c *client) setupConnection(initialSeqNum int, hostport string) bool {
+	addr, err := lspnet.ResolveUDPAddr("udp", hostport)
+	if err != nil {
+		return false
+	}
+	c.udpAddr = addr
+	udpConn, err := lspnet.DialUDP("udp", nil, addr)
+	if err != nil {
+		return false
+	}
+	c.udpConn = udpConn
+
 	request, err := json.Marshal(NewConnect(initialSeqNum))
 	if err != nil {
 		return false
