@@ -267,9 +267,7 @@ func (c *client) handleMessage() {
 			return
 		}
 
-		fmt.Println("ready to read")
 		message := c.readMessage()
-		fmt.Println("1   read: " + message.String())
 		go func(c *client) {
 			if message.Type == MsgAck {
 				// Handle Ack
@@ -307,7 +305,6 @@ func (c *client) handleCAckMsg(msg Message) {
 
 func (c *client) updateSlidingWindow(nonAckMsgMap map[int]*ClientMessage) {
 	oldSlidingWindow := <-c.slidingWindow
-	fmt.Println("5   here")
 	var slidingWindow []int
 	for idx, seqNum := range oldSlidingWindow {
 		if _, found := nonAckMsgMap[seqNum]; found {
@@ -317,7 +314,7 @@ func (c *client) updateSlidingWindow(nonAckMsgMap map[int]*ClientMessage) {
 		}
 	}
 	buffer := <-c.writeMessageBuffer
-	fmt.Printf("6   here sliding window size: %d, buffer size: %d, unack size: %d\n", len(slidingWindow), len(buffer), len(nonAckMsgMap))
+	//fmt.Printf("6   here sliding window size: %d, buffer size: %d, unack size: %d\n", len(slidingWindow), len(buffer), len(nonAckMsgMap))
 	i := 0
 	for ; i < len(buffer); i++ {
 		if len(slidingWindow) >= c.params.WindowSize ||
@@ -333,7 +330,7 @@ func (c *client) updateSlidingWindow(nonAckMsgMap map[int]*ClientMessage) {
 	} else {
 		buffer = buffer[i:]
 	}
-	fmt.Printf("7   here sliding window size: %d, buffer size: %d, unack size: %d\n", len(slidingWindow), len(buffer), len(nonAckMsgMap))
+	//fmt.Printf("7   here sliding window size: %d, buffer size: %d, unack size: %d\n", len(slidingWindow), len(buffer), len(nonAckMsgMap))
 	c.writeMessageBuffer <- buffer
 	c.slidingWindow <- slidingWindow
 }
@@ -385,17 +382,14 @@ func (c *client) Write(payload []byte) error {
 		slidingWindow := <-c.slidingWindow
 		if len(nonAckMsgMap) < c.params.MaxUnackedMessages &&
 			len(slidingWindow) < c.params.WindowSize {
-			fmt.Println("3  hereeeee")
 			slidingWindow = append(slidingWindow, seqNum)
 			nonAckMsgMap[seqNum] = clientMessage
 			c.slidingWindow <- slidingWindow
 			c.nonAckMsgMap <- nonAckMsgMap
-			fmt.Println("writeeee" + clientMessage.message.String())
 			c.writeMessage(clientMessage.message)
 		} else {
 			c.slidingWindow <- slidingWindow
 			c.nonAckMsgMap <- nonAckMsgMap
-			fmt.Println("4  hereeeee")
 
 			buffer := <-c.writeMessageBuffer
 			buffer = append(buffer, clientMessage)
