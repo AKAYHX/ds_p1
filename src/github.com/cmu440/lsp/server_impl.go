@@ -502,7 +502,6 @@ func (s *server) Close() error {
 	s.closeMain <- true
 	s.closeRead <- true
 	s.closeWrite <- true
-	s.closeBuffer <- true
 	s.closeConnect <- true
 	s.closeAck <- true
 	s.closeSeqNum <- true
