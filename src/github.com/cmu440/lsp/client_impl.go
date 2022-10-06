@@ -1,4 +1,16 @@
 // Contains the implementation of a LSP client.
+/**
+Sliding Window design:
+ 	openSlidingMsgWindow buffer of params.WindowSize
+	slidingWindow ~ list of seq num
+	write data: openSlidingMsgWindow is full -> block;
+					not full -> update(nonAckMsgMap)
+								-> len(nonAckMsgMap) > MaxUnackedMessages -> block
+									-> update nonAckMsgMap, append(slidingWindow)
+	receiving ack: if current ack.seq == slidingWindow[0] -> update nonAckMsgMap,
+															while (slidingWindow[0] not in nonAckMsgMap) {poll(openSlidingMsgWindow), slidingWindow[1:]}
+						-> update nonAckMsgMap
+*/
 
 package lsp
 
@@ -37,6 +49,10 @@ type client struct {
 	resendQueueList chan [][]int
 	// Map of non-acked message {seq num: message}
 	nonAckMsgMap chan map[int]*ClientMessage
+	// Signal of the non-ack message slot
+	openNonAckMsg chan int
+	// Sliding window of messages being sent
+	slidingWindow chan []int
 	// Signal of the availability within the sliding window
 	openSlidingMsgWindow chan int
 	// Check if there is at least one message being sent in the current epoch
@@ -92,6 +108,8 @@ func NewClient(hostport string, initialSeqNum int, params *Params) (Client, erro
 		activeEpoch:               make(chan int, 1),
 		idleEpoch:                 make(chan int, 1),
 		immediateStop:             make(chan bool, 1),
+		slidingWindow:             make(chan []int, 1),
+		openNonAckMsg:             make(chan int, params.MaxUnackedMessages),
 	}
 	cli.closed <- false
 	cli.currentSeqNum <- initialSeqNum
@@ -103,6 +121,7 @@ func NewClient(hostport string, initialSeqNum int, params *Params) (Client, erro
 	cli.immediateStop <- false
 	cli.activeEpoch <- 0
 	cli.idleEpoch <- 0
+	cli.slidingWindow <- []int{}
 
 	backoff := 0
 	for {
@@ -275,30 +294,48 @@ func (c *client) handleMessage() {
 
 func (c *client) handleAckMsg(message Message) {
 	nonAckMsgMap := <-c.nonAckMsgMap
-	if _, found := nonAckMsgMap[message.SeqNum]; found {
-		delete(nonAckMsgMap, message.SeqNum)
-		select {
-		case <-c.openSlidingMsgWindow:
-		default:
-		}
-	}
-
+	c.removeNonAckMsg(nonAckMsgMap, message.SeqNum)
 	c.nonAckMsgMap <- nonAckMsgMap
+
+	c.updateSlidingWindow(nonAckMsgMap)
 }
 
 func (c *client) handleCAckMsg(msg Message) {
 	nonAckMsgMap := <-c.nonAckMsgMap
 	for seqNum := range nonAckMsgMap {
-		if seqNum < msg.SeqNum {
-			delete(nonAckMsgMap, seqNum)
+		if seqNum <= msg.SeqNum {
+			c.removeNonAckMsg(nonAckMsgMap, msg.SeqNum)
+		}
+	}
+	c.nonAckMsgMap <- nonAckMsgMap
+
+	c.updateSlidingWindow(nonAckMsgMap)
+}
+
+func (c *client) removeNonAckMsg(nonAckMsgMap map[int]*ClientMessage, seqNum int) {
+	delete(nonAckMsgMap, seqNum)
+	select {
+	case <-c.openNonAckMsg:
+	default:
+	}
+}
+
+func (c *client) updateSlidingWindow(nonAckMsgMap map[int]*ClientMessage) {
+	slidingWindow := <-c.slidingWindow
+	for idx, seqNum := range slidingWindow {
+		if _, found := nonAckMsgMap[seqNum]; !found {
+			// Message has been ack-ed
 			select {
 			case <-c.openSlidingMsgWindow:
 			default:
 			}
+		} else {
+			// not received ack
+			slidingWindow = slidingWindow[idx:]
+			break
 		}
 	}
-
-	c.nonAckMsgMap <- nonAckMsgMap
+	c.slidingWindow <- slidingWindow
 }
 
 func (c *client) handleDataMsg(msg Message) {
@@ -341,7 +378,8 @@ func (c *client) Write(payload []byte) error {
 	seqNum++
 	c.currentSeqNum <- seqNum
 
-	go c.writeMessage(NewData(c.connID, seqNum, len(payload), payload, CalculateChecksum(c.connID, seqNum, len(payload), payload)))
+	go c.writeMessage(NewData(c.connID, seqNum, len(payload), payload,
+		CalculateChecksum(c.connID, seqNum, len(payload), payload)))
 
 	return nil
 }
@@ -383,27 +421,30 @@ func (c *client) processResendMessageQueue(resendQueue []int) {
 }
 
 func (c *client) writeMessage(message *Message) {
-	nonAckMsgMap := <-c.nonAckMsgMap
-	c.nonAckMsgMap <- nonAckMsgMap
-	if _, found := nonAckMsgMap[message.SeqNum]; !found {
-		select {
-		case c.openSlidingMsgWindow <- 1:
-		}
-	}
-
 	immediateStop := <-c.immediateStop
 	c.immediateStop <- immediateStop
 	if immediateStop {
 		return
 	}
 
-	active := <-c.activeEpoch
-	active = 1
-	c.activeEpoch <- active
+	nonAckMsgMap := <-c.nonAckMsgMap
+	c.nonAckMsgMap <- nonAckMsgMap
+	if _, found := nonAckMsgMap[message.SeqNum]; !found {
+		select {
+		case c.openSlidingMsgWindow <- 1: // Block until the message can be sent
+			select {
+			case c.openNonAckMsg <- 1: // Block until the non-ack msg can be sent
+				c.updateBackoffEpoch(message)
+			}
+		}
+	}
 
 	marshaledMsg, _ := json.Marshal(*message)
 	c.udpConn.Write(marshaledMsg)
-	c.updateBackoffEpoch(message)
+
+	active := <-c.activeEpoch
+	active = 1
+	c.activeEpoch <- active
 }
 
 // Update the backoff & nonAckMsgMap, and put into the resend queue
@@ -415,20 +456,28 @@ func (c *client) updateBackoffEpoch(msg *Message) {
 	if !found {
 		backoff = 0
 		message = &ClientMessage{message: msg, backoff: 1}
+
+		slidingWindow := <-c.slidingWindow
+		slidingWindow = append(slidingWindow, msg.SeqNum)
+		c.slidingWindow <- slidingWindow
 	} else {
 		backoff = message.backoff
 		message.backoff *= 2
 	}
 	if backoff > c.params.MaxBackOffInterval {
-		delete(nonAckMsgMap, msg.SeqNum)
+		c.removeNonAckMsg(nonAckMsgMap, msg.SeqNum)
+		c.nonAckMsgMap <- nonAckMsgMap
+
 		select {
 		case <-c.openSlidingMsgWindow:
 		default:
 		}
+		slidingWindow := <-c.slidingWindow
+		c.slidingWindow <- slidingWindow[1:]
 	} else {
 		nonAckMsgMap[msg.SeqNum] = message
+		c.nonAckMsgMap <- nonAckMsgMap
 	}
-	c.nonAckMsgMap <- nonAckMsgMap
 
 	// Put the message into resend queue
 	resendQueueList := <-c.resendQueueList
@@ -483,4 +532,4 @@ func Max(x int, y int) int {
 	return y
 }
 
-// TODO MaxUnackedMessages
+
