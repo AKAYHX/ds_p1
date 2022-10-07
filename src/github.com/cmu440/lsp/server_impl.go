@@ -5,6 +5,7 @@ package lsp
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/cmu440/lspnet"
 	"strconv"
 	"time"
@@ -14,6 +15,7 @@ const Maxsize = 2000
 
 type server struct {
 	conn               *lspnet.UDPConn
+	addr               *lspnet.UDPAddr
 	readChan           chan *Msg
 	writeChan          chan *Msg
 	preWriteChan       chan *writeData
@@ -56,6 +58,7 @@ type server struct {
 	closed             bool
 	closeReply         chan bool
 	closeunAck         chan bool
+	hadclient          bool
 }
 
 type serverClient struct {
@@ -124,6 +127,7 @@ func NewServer(port int, params *Params) (Server, error) {
 		return nil, err
 	}
 	s := &server{conn,
+		addr,
 		make(chan *Msg),
 		make(chan *Msg),
 		make(chan *writeData),
@@ -166,6 +170,7 @@ func NewServer(port int, params *Params) (Server, error) {
 		false,
 		make(chan bool),
 		make(chan bool),
+		false,
 	}
 	go s.mainRoutine()
 	go s.readRoutine()
@@ -202,7 +207,7 @@ func (s *server) mainRoutine() {
 				//fmt.Println("ack?")
 				s.unAckReq <- &unAckMsg{client, -1, message, -1, -1, -1}
 			case MsgData:
-				//fmt.Println("msg?")
+				//fmt.Println("received: ", message.String())
 				if message.Size != len(message.Payload) {
 					if message.Size > len(message.Payload) {
 						continue
@@ -252,6 +257,7 @@ func (s *server) epochRoutine() {
 				client.heard += 1
 				if client.heard >= s.EpochLimit {
 					delete(s.clients, client.id)
+					s.outChan <- nil
 					continue
 				}
 				for _, msg := range client.unAcked {
@@ -385,6 +391,7 @@ func (s *server) handleWrite() {
 			size := len(writedata.payload)
 			sum := CalculateChecksum(connId, SeqNum, size, payload)
 			message := NewData(connId, SeqNum, size, payload, sum)
+			fmt.Println("towrite: ", message.String())
 			s.unAckReq <- &unAckMsg{client, SeqNum, message, 0, 0, 1}
 		}
 	}
@@ -468,6 +475,7 @@ func (s *server) connectRoutine() {
 					0,
 					false,
 					0}
+				s.hadclient = true
 				ack := NewAck(s.id, msg.message.SeqNum)
 				msg = &Msg{msg.addr, ack}
 				s.writeChan <- msg
@@ -485,7 +493,7 @@ func (s *server) readRoutine() {
 			buffer := make([]byte, Maxsize)
 			n, addr, err := s.conn.ReadFromUDP(buffer)
 			if err != nil {
-				return
+				continue
 			}
 			var message Message
 			err = json.Unmarshal(buffer[:n], &message)
@@ -493,9 +501,7 @@ func (s *server) readRoutine() {
 				return
 			}
 			msg := &Msg{addr, &message}
-			//fmt.Println("ready to read")
 			s.readChan <- msg
-			//fmt.Println("sent to read")
 		}
 	}
 }
@@ -525,10 +531,12 @@ func (s *server) Read() (int, []byte, error) {
 	if s.closed {
 		return 0, nil, errors.New("closed")
 	}
-	select {
-	case message := <-s.outChan:
-		return message.ConnID, message.Payload, nil
-	} // Blocks indefinitely.
+	message := <-s.outChan
+	if message == nil {
+		return 0, nil, errors.New("client closed")
+	}
+	fmt.Println("read: ", message.String())
+	return message.ConnID, message.Payload, nil
 }
 
 func (s *server) Write(connId int, payload []byte) error {
@@ -566,7 +574,9 @@ func (s *server) Close() error {
 			time.Sleep(time.Duration(s.EpochMillis * 1000000))
 		}
 	}
+	s.conn.WriteToUDP(nil, s.addr)
 	//fmt.Println("done1")
+	s.conn.Close()
 	s.closeRead <- true
 	//fmt.Println("done2")
 	s.closeMain <- true
@@ -587,6 +597,5 @@ func (s *server) Close() error {
 	//fmt.Println("done10")
 	s.closeunAck <- true
 	//fmt.Println("done all")
-	s.conn.Close()
 	return nil
 }
