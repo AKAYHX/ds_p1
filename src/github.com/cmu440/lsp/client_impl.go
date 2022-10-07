@@ -46,7 +46,7 @@ type client struct {
 	// List of messages that we try to send but haven't sent
 	writeMessageBuffer chan []*ClientMessage
 	// Current epoch
-	currentEpoch             chan int
+	currentEpoch chan int
 }
 
 type ClientMessage struct {
@@ -81,7 +81,7 @@ func NewClient(hostport string, initialSeqNum int, params *Params) (Client, erro
 		nonAckMsgMap:              make(chan map[int]*ClientMessage, 1),
 		activeEpoch:               make(chan int, 1),
 		idleEpoch:                 make(chan int, 1),
-		connectionClosed:             make(chan bool),
+		connectionClosed:          make(chan bool),
 		slidingWindow:             make(chan []int, 1),
 		writeMessageBuffer:        make(chan []*ClientMessage, 1),
 		currentEpoch:              make(chan int, 1),
@@ -259,7 +259,7 @@ func (c *client) readMessage() Message {
 func (c *client) handleMessage() {
 	for {
 		message := c.readMessage()
-		fmt.Println("client read: "+message.String())
+		//fmt.Println("client read: "+message.String())
 
 		closed := <-c.close
 		c.close <- closed
