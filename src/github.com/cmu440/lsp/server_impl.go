@@ -59,6 +59,10 @@ type server struct {
 	closeReply         chan bool
 	closeunAck         chan bool
 	hadclient          bool
+	buffer             []*Message
+	readRequest        chan bool
+	readResponse       chan *Message
+	closebeforeRead    chan bool
 }
 
 type serverClient struct {
@@ -171,6 +175,10 @@ func NewServer(port int, params *Params) (Server, error) {
 		make(chan bool),
 		make(chan bool),
 		false,
+		make([]*Message, 0),
+		make(chan bool),
+		make(chan *Message),
+		make(chan bool),
 	}
 	go s.mainRoutine()
 	go s.readRoutine()
@@ -182,6 +190,7 @@ func NewServer(port int, params *Params) (Server, error) {
 	go s.handleWrite()
 	go s.unAckRoutine()
 	go s.epochRoutine()
+	go s.beforeRead()
 	return s, nil
 }
 
@@ -207,7 +216,7 @@ func (s *server) mainRoutine() {
 				//fmt.Println("ack?")
 				s.unAckReq <- &unAckMsg{client, -1, message, -1, -1, -1}
 			case MsgData:
-				//fmt.Println("received: ", message.String())
+				//fmt.Println("msg?")
 				if message.Size != len(message.Payload) {
 					if message.Size > len(message.Payload) {
 						continue
@@ -241,6 +250,7 @@ func (s *server) mainRoutine() {
 				} else {
 					s.writeMsg <- &writeClient{client, seq, message}
 				}
+				//fmt.Println("msg!")
 			}
 			//fmt.Println("processed")
 		}
@@ -391,7 +401,7 @@ func (s *server) handleWrite() {
 			size := len(writedata.payload)
 			sum := CalculateChecksum(connId, SeqNum, size, payload)
 			message := NewData(connId, SeqNum, size, payload, sum)
-			fmt.Println("towrite: ", message.String())
+			//fmt.Println("towrite: ", message.String())
 			s.unAckReq <- &unAckMsg{client, SeqNum, message, 0, 0, 1}
 		}
 	}
@@ -497,11 +507,13 @@ func (s *server) readRoutine() {
 			}
 			var message Message
 			err = json.Unmarshal(buffer[:n], &message)
+			fmt.Println("!server received: ", message.String())
 			if err != nil {
 				return
 			}
 			msg := &Msg{addr, &message}
 			s.readChan <- msg
+			//fmt.Println("!sent to read chan")
 		}
 	}
 }
@@ -517,7 +529,7 @@ func (s *server) writeRoutine() {
 				continue
 			}
 			s.conn.WriteToUDP(buffer, msg.addr)
-			//fmt.Println(msg.message.ConnID)
+			fmt.Println("!server wrote: ", msg.message.String())
 			if client != nil {
 				client.sent = true
 			}
@@ -527,15 +539,39 @@ func (s *server) writeRoutine() {
 	}
 }
 
+func (s *server) beforeRead() {
+	for {
+		select {
+		case <-s.closebeforeRead:
+			return
+		case message := <-s.outChan:
+			s.buffer = append(s.buffer, message)
+		case <-s.readRequest:
+			if len(s.buffer) > 0 {
+				s.readResponse <- s.buffer[0]
+				s.buffer = s.buffer[1:]
+			} else {
+				select {
+				case <-s.closebeforeRead:
+					return
+				case msg := <-s.outChan:
+					s.readResponse <- msg
+				}
+			}
+		}
+	}
+}
+
 func (s *server) Read() (int, []byte, error) {
 	if s.closed {
 		return 0, nil, errors.New("closed")
 	}
-	message := <-s.outChan
+	s.readRequest <- true
+	message := <-s.readResponse
 	if message == nil {
 		return 0, nil, errors.New("client closed")
 	}
-	fmt.Println("read: ", message.String())
+	fmt.Println("!server read: ", message.String())
 	return message.ConnID, message.Payload, nil
 }
 
@@ -576,6 +612,7 @@ func (s *server) Close() error {
 	}
 	//fmt.Println("done1")
 	s.conn.Close()
+	s.closebeforeRead <- true
 	s.closeRead <- true
 	//fmt.Println("done2")
 	s.closeMain <- true
@@ -595,6 +632,6 @@ func (s *server) Close() error {
 	s.closeEpoch <- true
 	//fmt.Println("done10")
 	s.closeunAck <- true
-	//fmt.Println("!!!closed")
+	fmt.Println("!!!closed")
 	return nil
 }
