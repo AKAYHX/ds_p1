@@ -443,13 +443,14 @@ func (c *client) handleResendMessage() {
 						marshaledMsg, _ := json.Marshal(msg.message)
 						c.udpConn.Write(marshaledMsg)
 						//fmt.Println("client re write "+msg.message.String())
-						msg.resendEpoch = currentEpoch + msg.backoff + 1
 						if msg.backoff == 0 {
 							msg.backoff = 1
 						} else {
 							msg.backoff *= 2
 						}
 						msg.backoff = Min(msg.backoff, c.params.MaxBackOffInterval)
+						msg.resendEpoch = currentEpoch + msg.backoff + 1
+						//fmt.Printf("client %d resend %d backoff %d\n", c.connID, msg.resendEpoch, msg.backoff)
 						nonAckMsgMap[seqNum] = msg
 						c.activateEpoch()
 					}
