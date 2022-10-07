@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/cmu440/lspnet"
 	"time"
 )
@@ -116,7 +117,7 @@ func NewClient(hostport string, initialSeqNum int, params *Params) (Client, erro
 		case <-time.After(time.Duration(MilliToNano * params.EpochMillis)):
 		}
 	}
-	return nil, errors.New("exceed MaxBackOffInterval")
+	return nil, errors.New("exceed EpochLimit")
 }
 
 func (c *client) setupConnection(initialSeqNum int, hostport string) bool {
@@ -258,7 +259,7 @@ func (c *client) readMessage() Message {
 func (c *client) handleMessage() {
 	for {
 		message := c.readMessage()
-		//fmt.Println(message.String())
+		fmt.Println("client read: "+message.String())
 
 		closed := <-c.close
 		c.close <- closed
@@ -284,14 +285,12 @@ func (c *client) handleMessage() {
 func (c *client) handleAckMsg(message Message) {
 	nonAckMsgMap := <-c.nonAckMsgMap
 	delete(nonAckMsgMap, message.SeqNum)
-
 	c.updateSlidingWindow(nonAckMsgMap)
 	c.nonAckMsgMap <- nonAckMsgMap
 }
 
 func (c *client) handleCAckMsg(msg Message) {
 	nonAckMsgMap := <-c.nonAckMsgMap
-	//fmt.Printf("4   here unack size: %d ack %d\n", len(nonAckMsgMap), msg.SeqNum)
 
 	for seqNum := range nonAckMsgMap {
 		if seqNum <= msg.SeqNum {
@@ -301,7 +300,6 @@ func (c *client) handleCAckMsg(msg Message) {
 
 	c.updateSlidingWindow(nonAckMsgMap)
 	c.nonAckMsgMap <- nonAckMsgMap
-	//fmt.Printf("5   here unack size: %d\n", len(nonAckMsgMap))
 }
 
 func (c *client) updateSlidingWindow(nonAckMsgMap map[int]*ClientMessage) {
@@ -387,30 +385,28 @@ func (c *client) Write(payload []byte) error {
 	c.currentEpoch <- currentEpoch
 
 	clientMessage := &ClientMessage{message: NewData(c.connID, seqNum, len(payload), payload,
-		CalculateChecksum(c.connID, seqNum, len(payload), payload)), backoff: 1, resendEpoch: currentEpoch + 1}
+		CalculateChecksum(c.connID, seqNum, len(payload), payload)), backoff: 0, resendEpoch: currentEpoch + 1}
 
-	go func() {
-		nonAckMsgMap := <-c.nonAckMsgMap
-		slidingWindow := <-c.slidingWindow
-		if len(nonAckMsgMap) < c.params.MaxUnackedMessages &&
-			len(slidingWindow) < c.params.WindowSize {
-			slidingWindow = append(slidingWindow, seqNum)
-			nonAckMsgMap[seqNum] = clientMessage
-			c.slidingWindow <- slidingWindow
-			c.nonAckMsgMap <- nonAckMsgMap
-			c.writeMessage(clientMessage.message)
-			//fmt.Printf("2   here sliding window size: %d, buffer size: not buffer, unack size: %d\n", len(slidingWindow), len(nonAckMsgMap))
+	nonAckMsgMap := <-c.nonAckMsgMap
+	slidingWindow := <-c.slidingWindow
+	if len(nonAckMsgMap) < c.params.MaxUnackedMessages &&
+		len(slidingWindow) < c.params.WindowSize {
+		slidingWindow = append(slidingWindow, seqNum)
+		nonAckMsgMap[seqNum] = clientMessage
+		c.slidingWindow <- slidingWindow
+		c.nonAckMsgMap <- nonAckMsgMap
+		c.writeMessage(clientMessage.message)
+		fmt.Printf("2   here sliding window size: %d, buffer size: not buffer, unack size: %d, message: %s\n", len(slidingWindow), len(nonAckMsgMap), clientMessage.message)
 
-		} else {
-			c.slidingWindow <- slidingWindow
-			c.nonAckMsgMap <- nonAckMsgMap
+	} else {
+		c.slidingWindow <- slidingWindow
+		c.nonAckMsgMap <- nonAckMsgMap
 
-			buffer := <-c.writeMessageBuffer
-			buffer = append(buffer, clientMessage)
-			c.writeMessageBuffer <- buffer
-			//fmt.Printf("3   here sliding window size: %d, buffer size: %d, unack size: %d\n", len(slidingWindow), len(buffer), len(nonAckMsgMap))
-		}
-	}()
+		buffer := <-c.writeMessageBuffer
+		buffer = append(buffer, clientMessage)
+		c.writeMessageBuffer <- buffer
+		//fmt.Printf("3   here sliding window size: %d, buffer size: %d, unack size: %d\n", len(slidingWindow), len(buffer), len(nonAckMsgMap))
+	}
 
 	return nil
 }
@@ -418,7 +414,7 @@ func (c *client) Write(payload []byte) error {
 func (c *client) writeMessage(message *Message) {
 	marshaledMsg, _ := json.Marshal(message)
 	c.udpConn.Write(marshaledMsg)
-
+	//fmt.Println("client write "+message.String())
 	c.activateEpoch()
 }
 
@@ -437,12 +433,17 @@ func (c *client) handleResendMessage() {
 			nonAckMsgMap := <-c.nonAckMsgMap
 			for _, seqNum := range slidingWindow {
 				if msg, found := nonAckMsgMap[seqNum]; found {
-					if msg.resendEpoch == currentEpoch {
+					if msg.resendEpoch <= currentEpoch {
 						marshaledMsg, _ := json.Marshal(msg.message)
 						c.udpConn.Write(marshaledMsg)
-
-						msg.resendEpoch = currentEpoch + msg.backoff
-						msg.backoff *= 2
+						//fmt.Println("client re write "+msg.message.String())
+						msg.resendEpoch = currentEpoch + msg.backoff + 1
+						if msg.backoff == 0 {
+							msg.backoff = 1
+						} else {
+							msg.backoff *= 2
+						}
+						msg.backoff = Min(msg.backoff, c.params.MaxBackOffInterval)
 						nonAckMsgMap[seqNum] = msg
 						c.activateEpoch()
 					}
@@ -504,3 +505,9 @@ func Max(x int, y int) int {
 	return y
 }
 
+func Min(x int, y int) int {
+	if x < y {
+		return x
+	}
+	return y
+}
