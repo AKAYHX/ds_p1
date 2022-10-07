@@ -228,13 +228,13 @@ func (c *client) Read() ([]byte, error) {
 			return msg.Payload, nil
 		case <-c.connectionClosed:
 			// All read data msg have been ack-ed
-			largestDataSeqNum := <-c.largestDataSeqNum
-			c.largestDataSeqNum <- largestDataSeqNum
-			currentProcessedMsgSeqNum := <-c.currentProcessedMsgSeqNum
-			c.currentProcessedMsgSeqNum <- currentProcessedMsgSeqNum
-			if largestDataSeqNum > currentProcessedMsgSeqNum {
-				continue
-			}
+			//largestDataSeqNum := <-c.largestDataSeqNum
+			//c.largestDataSeqNum <- largestDataSeqNum
+			//currentProcessedMsgSeqNum := <-c.currentProcessedMsgSeqNum
+			//c.currentProcessedMsgSeqNum <- currentProcessedMsgSeqNum
+			//if largestDataSeqNum > currentProcessedMsgSeqNum {
+			//	continue
+			//}
 
 			return nil, errors.New("the connection is closed")
 		}
@@ -372,9 +372,9 @@ func (c *client) handleDataMsg(msg Message) {
 			ackNum := <-c.currentProcessedMsgSeqNum
 			// Process data in order
 			if ackNum < 0 || msg.SeqNum-1 == ackNum {
-				c.readyDataMsg <- msg
 				ackNum = msg.SeqNum
 				c.currentProcessedMsgSeqNum <- ackNum
+				c.readyDataMsg <- msg
 				break
 			}
 			c.currentProcessedMsgSeqNum <- ackNum
