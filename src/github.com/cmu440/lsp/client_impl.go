@@ -20,7 +20,7 @@ type client struct {
 	udpConn *lspnet.UDPConn
 	udpAddr *lspnet.UDPAddr
 	connID  int
-	close   chan bool
+	closing   chan bool
 	// related params
 	params *Params
 	// Current sent seq num
@@ -47,6 +47,7 @@ type client struct {
 	writeMessageBuffer chan []*ClientMessage
 	// Current epoch
 	currentEpoch chan int
+	finalClose chan bool
 }
 
 type ClientMessage struct {
@@ -72,7 +73,7 @@ func NewClient(hostport string, initialSeqNum int, params *Params) (Client, erro
 	cli := &client{
 		connID:                    0,
 		params:                    params,
-		close:                     make(chan bool, 1),
+		closing:                     make(chan bool, 1),
 		currentSeqNum:             make(chan int, 1),
 		currentProcessedMsgSeqNum: make(chan int, 1),
 		largestDataSeqNum:         make(chan int, 1),
@@ -85,8 +86,10 @@ func NewClient(hostport string, initialSeqNum int, params *Params) (Client, erro
 		slidingWindow:             make(chan []int, 1),
 		writeMessageBuffer:        make(chan []*ClientMessage, 1),
 		currentEpoch:              make(chan int, 1),
+		finalClose: make(chan bool, 1),
 	}
-	cli.close <- false
+	cli.closing <- false
+	cli.finalClose <- false
 	cli.currentSeqNum <- initialSeqNum
 	cli.currentProcessedMsgSeqNum <- 0
 	cli.largestDataSeqNum <- -1
@@ -155,9 +158,9 @@ func (c *client) setupConnection(initialSeqNum int, hostport string) bool {
 
 func (c *client) epochTimer() {
 	for {
-		closed := <-c.close
-		c.close <- closed
-		if closed {
+		finalClosed := <-c.finalClose
+		c.finalClose <-finalClosed
+		if finalClosed {
 			return
 		}
 
@@ -191,8 +194,8 @@ func (c *client) epochTimer() {
 						case c.connectionClosed <- true:
 						default:
 						}
-						<-c.close
-						c.close <- true
+						<-c.closing
+						c.closing <- true
 						return
 					}
 				}
@@ -204,8 +207,8 @@ func (c *client) epochTimer() {
 func (c *client) sendHeartBeat() {
 	ack, _ := json.Marshal(NewAck(c.connID, 0))
 
-	closed := <-c.close
-	c.close <- closed
+	closed := <-c.closing
+	c.closing <- closed
 	if closed {
 		return
 	}
@@ -217,8 +220,8 @@ func (c *client) ConnID() int {
 }
 
 func (c *client) Read() ([]byte, error) {
-	closed := <-c.close
-	c.close <- closed
+	closed := <-c.closing
+	c.closing <- closed
 	if closed {
 		return nil, errors.New("the client is closed")
 	}
@@ -253,9 +256,9 @@ func (c *client) readMessage() Message {
 
 	if err != nil {
 		c.connectionClosed <- true
-		closed := <-c.close
+		closed := <-c.closing
 		closed = true
-		c.close <- closed
+		c.closing <- closed
 
 		return response
 	}
@@ -272,10 +275,11 @@ func (c *client) readMessage() Message {
 func (c *client) handleMessage() {
 	for {
 		message := c.readMessage()
+		fmt.Println("client read: "+message.String())
 
-		closed := <-c.close
-		c.close <- closed
-		if closed {
+		finalClose := <-c.finalClose
+		c.finalClose <- finalClose
+		if finalClose {
 			return
 		}
 
@@ -386,8 +390,8 @@ func (c *client) handleDataMsg(msg Message) {
 }
 
 func (c *client) Write(payload []byte) error {
-	closed := <-c.close
-	c.close <- closed
+	closed := <-c.closing
+	c.closing <- closed
 	if closed {
 		return errors.New("the client is closed")
 	}
@@ -435,8 +439,8 @@ func (c *client) writeMessage(message *Message) {
 
 func (c *client) handleResendMessage() {
 	for {
-		closed := <-c.close
-		c.close <- closed
+		closed := <-c.finalClose
+		c.finalClose <- closed
 		if closed {
 			return
 		}
@@ -450,8 +454,11 @@ func (c *client) handleResendMessage() {
 				if msg, found := nonAckMsgMap[seqNum]; found {
 					if msg.resendEpoch <= currentEpoch {
 						marshaledMsg, _ := json.Marshal(msg.message)
-						c.udpConn.Write(marshaledMsg)
-						//fmt.Println("client re write "+msg.message.String())
+						_, err := c.udpConn.Write(marshaledMsg)
+						if err != nil {
+							fmt.Println("client re write error "+err.Error())
+						}
+						fmt.Println("client re write "+msg.message.String())
 						if msg.backoff == 0 {
 							msg.backoff = 1
 						} else {
@@ -459,7 +466,6 @@ func (c *client) handleResendMessage() {
 						}
 						msg.backoff = Min(msg.backoff, c.params.MaxBackOffInterval)
 						msg.resendEpoch = currentEpoch + msg.backoff + 1
-						//fmt.Printf("client %d resend %d backoff %d\n", c.connID, msg.resendEpoch, msg.backoff)
 						nonAckMsgMap[seqNum] = msg
 						c.activateEpoch()
 					}
@@ -477,13 +483,15 @@ func (c *client) activateEpoch() {
 }
 
 func (c *client) Close() error {
-	closed := <-c.close
+	closed := <-c.closing
 	if closed {
-		c.close <- closed
+		c.closing <- closed
 		return nil
 	}
 	closed = true
-	c.close <- closed
+	c.closing <- closed
+
+	fmt.Println("closing")
 
 	// Block until all pending msg processed
 	for {
@@ -491,11 +499,13 @@ func (c *client) Close() error {
 		slidingWindow := <-c.slidingWindow
 		c.slidingWindow <- slidingWindow
 		if len(slidingWindow) > 0 {
+			//fmt.Println("111")
 			continue
 		}
 		buffer := <-c.writeMessageBuffer
 		c.writeMessageBuffer <- buffer
 		if len(buffer) > 0 {
+			fmt.Println("222")
 			continue
 		}
 
@@ -505,12 +515,17 @@ func (c *client) Close() error {
 		currentProcessedMsgSeqNum := <-c.currentProcessedMsgSeqNum
 		c.currentProcessedMsgSeqNum <- currentProcessedMsgSeqNum
 		if largestDataSeqNum > currentProcessedMsgSeqNum {
+			fmt.Println("333")
 			continue
 		}
 		break
 	}
 	c.udpConn.Close()
 
+	<-c.finalClose
+	c.finalClose<-true
+
+	fmt.Println("closed")
 	return nil
 }
 
