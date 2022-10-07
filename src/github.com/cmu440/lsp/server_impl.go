@@ -5,6 +5,7 @@ package lsp
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/cmu440/lspnet"
 	"strconv"
 	"time"
@@ -390,7 +391,7 @@ func (s *server) handleWrite() {
 			size := len(writedata.payload)
 			sum := CalculateChecksum(connId, SeqNum, size, payload)
 			message := NewData(connId, SeqNum, size, payload, sum)
-			//fmt.Println("towrite: ", message.String())
+			fmt.Println("towrite: ", message.String())
 			s.unAckReq <- &unAckMsg{client, SeqNum, message, 0, 0, 1}
 		}
 	}
@@ -534,7 +535,7 @@ func (s *server) Read() (int, []byte, error) {
 	if message == nil {
 		return 0, nil, errors.New("client closed")
 	}
-	//fmt.Println("read: ", message.String())
+	fmt.Println("read: ", message.String())
 	return message.ConnID, message.Payload, nil
 }
 
@@ -556,24 +557,23 @@ func (s *server) CloseConn(connId int) error {
 		return errors.New("connId does not exist")
 	}
 	client := s.clients[connId]
+	time.Sleep(time.Duration(s.EpochMillis * 1000000))
 	s.closeclient <- client
 	return nil
 }
 
 func (s *server) Close() error {
+	//fmt.Println("called close")
 	s.closed = true
 	closed := false
 	for {
-		//fmt.Println("try!")
+		time.Sleep(time.Duration(s.EpochMillis * 1000000))
 		s.closeunAckRoutine <- true
 		closed = <-s.closeReply
 		if closed {
 			break
-		} else {
-			time.Sleep(time.Duration(s.EpochMillis * 1000000))
 		}
 	}
-	s.conn.WriteToUDP(nil, s.addr)
 	//fmt.Println("done1")
 	s.conn.Close()
 	s.closeRead <- true
@@ -595,6 +595,6 @@ func (s *server) Close() error {
 	s.closeEpoch <- true
 	//fmt.Println("done10")
 	s.closeunAck <- true
-	//fmt.Println("done all")
+	//fmt.Println("!!!closed")
 	return nil
 }
