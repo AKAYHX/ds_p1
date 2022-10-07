@@ -75,7 +75,7 @@ func NewClient(hostport string, initialSeqNum int, params *Params) (Client, erro
 		currentSeqNum:             make(chan int, 1),
 		currentProcessedMsgSeqNum: make(chan int, 1),
 		largestDataSeqNum:         make(chan int, 1),
-		readyDataMsg:              make(chan Message, 1),
+		readyDataMsg:              make(chan Message),
 		epochTimeout:              make(chan int),
 		nonAckMsgMap:              make(chan map[int]*ClientMessage, 1),
 		activeEpoch:               make(chan int, 1),
