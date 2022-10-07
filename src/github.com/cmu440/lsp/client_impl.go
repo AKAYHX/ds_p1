@@ -41,12 +41,11 @@ type client struct {
 	// Check the epoch since last message from the server
 	idleEpoch chan int
 	// Stop the client immediately rather than waiting the pending messages to be finished
-	immediateStop chan bool
-	// List of messages that we try to send but havent sent
+	connectionClosed chan bool
+	// List of messages that we try to send but haven't sent
 	writeMessageBuffer chan []*ClientMessage
 	// Current epoch
 	currentEpoch             chan int
-	readMessageRoutineClosed chan bool
 }
 
 type ClientMessage struct {
@@ -81,18 +80,16 @@ func NewClient(hostport string, initialSeqNum int, params *Params) (Client, erro
 		nonAckMsgMap:              make(chan map[int]*ClientMessage, 1),
 		activeEpoch:               make(chan int, 1),
 		idleEpoch:                 make(chan int, 1),
-		immediateStop:             make(chan bool, 1),
+		connectionClosed:             make(chan bool),
 		slidingWindow:             make(chan []int, 1),
 		writeMessageBuffer:        make(chan []*ClientMessage, 1),
 		currentEpoch:              make(chan int, 1),
-		readMessageRoutineClosed:  make(chan bool, 0),
 	}
 	cli.close <- false
 	cli.currentSeqNum <- initialSeqNum
 	cli.currentProcessedMsgSeqNum <- -1
 	cli.largestDataSeqNum <- -1
 	cli.nonAckMsgMap <- make(map[int]*ClientMessage)
-	cli.immediateStop <- false
 	cli.activeEpoch <- 0
 	cli.idleEpoch <- 0
 	cli.slidingWindow <- []int{}
@@ -189,8 +186,10 @@ func (c *client) epochTimer() {
 						c.idleEpoch <- idleEpoch + 1
 					}
 					if idleEpoch+1 >= c.params.EpochLimit {
-						<-c.immediateStop
-						c.immediateStop <- true
+						select {
+						case c.connectionClosed <- true:
+						default:
+						}
 						<-c.close
 						c.close <- true
 						return
@@ -204,9 +203,9 @@ func (c *client) epochTimer() {
 func (c *client) sendHeartBeat() {
 	ack, _ := json.Marshal(NewAck(c.connID, 0))
 
-	immediateStop := <-c.immediateStop
-	c.immediateStop <- immediateStop
-	if immediateStop {
+	closed := <-c.close
+	c.close <- closed
+	if closed {
 		return
 	}
 	c.udpConn.Write(ack)
@@ -225,6 +224,8 @@ func (c *client) Read() ([]byte, error) {
 
 	for {
 		select {
+		case <-c.connectionClosed:
+			return nil, errors.New("the connection is closed")
 		case msg := <-c.readyDataMsg:
 			ackNum := <-c.currentProcessedMsgSeqNum
 			ackNum = msg.SeqNum
@@ -237,15 +238,14 @@ func (c *client) Read() ([]byte, error) {
 func (c *client) readMessage() Message {
 	var response Message
 
-	immediateStop := <-c.immediateStop
-	c.immediateStop <- immediateStop
-	if immediateStop {
-		return response
-	}
-
 	buffer := make([]byte, MaxPacketSize)
 	bytes, err := bufio.NewReader(c.udpConn).Read(buffer)
 	if err != nil {
+		c.connectionClosed <- true
+		closed := <-c.close
+		closed = true
+		c.close <- closed
+
 		return response
 	}
 	json.Unmarshal(buffer[:bytes], &response)
@@ -265,7 +265,6 @@ func (c *client) handleMessage() {
 		closed := <-c.close
 		c.close <- closed
 		if closed {
-			//c.readMessageRoutineClosed <- true
 			return
 		}
 
@@ -366,11 +365,6 @@ func (c *client) handleDataMsg(msg Message) {
 	}
 
 	// Ack the data
-	immediateStop := <-c.immediateStop
-	c.immediateStop <- immediateStop
-	if immediateStop {
-		return
-	}
 	ack, _ := json.Marshal(NewAck(c.connID, msg.SeqNum))
 	c.udpConn.Write(ack)
 }
@@ -427,9 +421,9 @@ func (c *client) writeMessage(message *Message) {
 
 func (c *client) handleResendMessage() {
 	for {
-		immediateStop := <-c.immediateStop
-		c.immediateStop <- immediateStop
-		if immediateStop {
+		closed := <-c.close
+		c.close <- closed
+		if closed {
 			return
 		}
 
@@ -496,9 +490,6 @@ func (c *client) Close() error {
 		break
 	}
 	c.udpConn.Close()
-	select {
-	case <-c.readMessageRoutineClosed:
-	}
 
 	return nil
 }
@@ -510,4 +501,3 @@ func Max(x int, y int) int {
 	return y
 }
 
-// TODO: When a request client loses contact with the server, it should print Disconnected to standard output and exit.
