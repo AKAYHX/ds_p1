@@ -512,7 +512,7 @@ func (s *server) writeRoutine() {
 			}
 			s.conn.WriteToUDP(buffer, msg.addr)
 			//fmt.Println(msg.message.ConnID)
-			fmt.Println("server write "+msg.message.String())
+			fmt.Println("server write " + msg.message.String())
 			if client != nil {
 				client.sent = true
 			}
