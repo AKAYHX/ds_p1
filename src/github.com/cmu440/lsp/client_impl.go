@@ -227,6 +227,7 @@ func (c *client) Read() ([]byte, error) {
 		case <-c.connectionClosed:
 			return nil, errors.New("the connection is closed")
 		case msg := <-c.readyDataMsg:
+			//fmt.Println("read output "+msg.String())
 			return msg.Payload, nil
 		}
 	}
@@ -237,6 +238,8 @@ func (c *client) readMessage() Message {
 
 	buffer := make([]byte, MaxPacketSize)
 	bytes, err := bufio.NewReader(c.udpConn).Read(buffer)
+
+	//fmt.Printf("bytes %d buffer %d\n", bytes, len(buffer))
 
 	if err != nil {
 		c.connectionClosed <- true
