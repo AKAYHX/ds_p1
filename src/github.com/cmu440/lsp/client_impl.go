@@ -258,7 +258,6 @@ func (c *client) readMessage() Message {
 func (c *client) handleMessage() {
 	for {
 		message := c.readMessage()
-		//fmt.Println(message.String())
 
 		closed := <-c.close
 		c.close <- closed
@@ -284,14 +283,12 @@ func (c *client) handleMessage() {
 func (c *client) handleAckMsg(message Message) {
 	nonAckMsgMap := <-c.nonAckMsgMap
 	delete(nonAckMsgMap, message.SeqNum)
-
 	c.updateSlidingWindow(nonAckMsgMap)
 	c.nonAckMsgMap <- nonAckMsgMap
 }
 
 func (c *client) handleCAckMsg(msg Message) {
 	nonAckMsgMap := <-c.nonAckMsgMap
-	//fmt.Printf("4   here unack size: %d ack %d\n", len(nonAckMsgMap), msg.SeqNum)
 
 	for seqNum := range nonAckMsgMap {
 		if seqNum <= msg.SeqNum {
@@ -301,7 +298,6 @@ func (c *client) handleCAckMsg(msg Message) {
 
 	c.updateSlidingWindow(nonAckMsgMap)
 	c.nonAckMsgMap <- nonAckMsgMap
-	//fmt.Printf("5   here unack size: %d\n", len(nonAckMsgMap))
 }
 
 func (c *client) updateSlidingWindow(nonAckMsgMap map[int]*ClientMessage) {
@@ -418,7 +414,6 @@ func (c *client) Write(payload []byte) error {
 func (c *client) writeMessage(message *Message) {
 	marshaledMsg, _ := json.Marshal(message)
 	c.udpConn.Write(marshaledMsg)
-
 	c.activateEpoch()
 }
 
@@ -437,10 +432,9 @@ func (c *client) handleResendMessage() {
 			nonAckMsgMap := <-c.nonAckMsgMap
 			for _, seqNum := range slidingWindow {
 				if msg, found := nonAckMsgMap[seqNum]; found {
-					if msg.resendEpoch == currentEpoch {
+					if msg.resendEpoch <= currentEpoch {
 						marshaledMsg, _ := json.Marshal(msg.message)
 						c.udpConn.Write(marshaledMsg)
-
 						msg.resendEpoch = currentEpoch + msg.backoff
 						msg.backoff *= 2
 						nonAckMsgMap[seqNum] = msg
