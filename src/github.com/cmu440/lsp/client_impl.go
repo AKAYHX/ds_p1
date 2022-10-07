@@ -337,6 +337,9 @@ func (c *client) updateSlidingWindow(nonAckMsgMap map[int]*ClientMessage) {
 
 func (c *client) handleDataMsg(msg Message) {
 	// Handle variable length
+	if len(msg.Payload) < msg.Size {
+		return
+	}
 	if len(msg.Payload) > msg.Size {
 		msg.Payload = msg.Payload[:msg.Size]
 	}
