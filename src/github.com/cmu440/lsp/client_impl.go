@@ -227,9 +227,6 @@ func (c *client) Read() ([]byte, error) {
 		case <-c.connectionClosed:
 			return nil, errors.New("the connection is closed")
 		case msg := <-c.readyDataMsg:
-			ackNum := <-c.currentProcessedMsgSeqNum
-			ackNum = msg.SeqNum
-			c.currentProcessedMsgSeqNum <- ackNum
 			return msg.Payload, nil
 		}
 	}
@@ -362,12 +359,14 @@ func (c *client) handleDataMsg(msg Message) {
 
 		for {
 			ackNum := <-c.currentProcessedMsgSeqNum
-			c.currentProcessedMsgSeqNum <- ackNum
 			// Process data in order
 			if ackNum < 0 || msg.SeqNum-1 == ackNum {
+				ackNum = msg.SeqNum
+				c.currentProcessedMsgSeqNum <- ackNum
 				c.readyDataMsg <- msg
 				break
 			}
+			c.currentProcessedMsgSeqNum <- ackNum
 		}
 	}()
 
@@ -441,6 +440,7 @@ func (c *client) handleResendMessage() {
 					if msg.resendEpoch == currentEpoch {
 						marshaledMsg, _ := json.Marshal(msg.message)
 						c.udpConn.Write(marshaledMsg)
+
 						msg.resendEpoch = currentEpoch + msg.backoff
 						msg.backoff *= 2
 						nonAckMsgMap[seqNum] = msg
