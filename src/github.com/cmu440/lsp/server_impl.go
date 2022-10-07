@@ -351,8 +351,8 @@ func (s *server) unAckRoutine() {
 			} else {
 				left := client.left
 				msg := &Msg{client.addr, message}
+				//fmt.Println("!", message.String())
 				if len(client.unAcked) < s.MaxUnackedMessages && left+s.WindowSize >= seq {
-					//fmt.Println("toWrite", message.SeqNum)
 					client.unAcked = append(client.unAcked, req)
 					s.writeChan <- msg
 				} else {
@@ -380,8 +380,9 @@ func (s *server) handleWrite() {
 			if client == nil {
 				continue
 			}
-			SeqNum := client.serverSeqNum + 1
 			s.serverseqAdd <- client
+			s.serverseqRead <- client
+			SeqNum := <-s.serverseqRes
 			size := len(writedata.payload)
 			sum := CalculateChecksum(connId, SeqNum, size, payload)
 			message := NewData(connId, SeqNum, size, payload, sum)
@@ -512,7 +513,7 @@ func (s *server) writeRoutine() {
 			}
 			s.conn.WriteToUDP(buffer, msg.addr)
 			//fmt.Println(msg.message.ConnID)
-			fmt.Println("server write "+msg.message.String())
+			fmt.Println("server write " + msg.message.String())
 			if client != nil {
 				client.sent = true
 			}
