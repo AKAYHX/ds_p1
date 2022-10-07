@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/cmu440/lspnet"
 	"time"
 )
@@ -87,7 +88,7 @@ func NewClient(hostport string, initialSeqNum int, params *Params) (Client, erro
 	}
 	cli.close <- false
 	cli.currentSeqNum <- initialSeqNum
-	cli.currentProcessedMsgSeqNum <- -1
+	cli.currentProcessedMsgSeqNum <- 0
 	cli.largestDataSeqNum <- -1
 	cli.nonAckMsgMap <- make(map[int]*ClientMessage)
 	cli.activeEpoch <- 0
@@ -225,6 +226,7 @@ func (c *client) Read() ([]byte, error) {
 	for {
 		select {
 		case msg := <-c.readyDataMsg:
+			fmt.Println("read msg: "+msg.String())
 			return msg.Payload, nil
 		case <-c.connectionClosed:
 			// All read data msg have been ack-ed
@@ -371,7 +373,7 @@ func (c *client) handleDataMsg(msg Message) {
 		for {
 			ackNum := <-c.currentProcessedMsgSeqNum
 			// Process data in order
-			if ackNum < 0 || msg.SeqNum-1 == ackNum {
+			if msg.SeqNum-1 == ackNum {
 				ackNum = msg.SeqNum
 				c.currentProcessedMsgSeqNum <- ackNum
 				c.readyDataMsg <- msg
