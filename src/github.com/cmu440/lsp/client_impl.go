@@ -6,7 +6,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"github.com/cmu440/lspnet"
 	"time"
 )
@@ -186,7 +185,7 @@ func (c *client) epochTimer() {
 						// No message from the server in this epoch
 						c.idleEpoch <- idleEpoch + 1
 					}
-					if idleEpoch+1 >= c.params.EpochLimit {
+					if idleEpoch+1 > c.params.EpochLimit {
 						select {
 						case c.connectionClosed <- true:
 						default:
@@ -238,6 +237,7 @@ func (c *client) readMessage() Message {
 
 	buffer := make([]byte, MaxPacketSize)
 	bytes, err := bufio.NewReader(c.udpConn).Read(buffer)
+
 	if err != nil {
 		c.connectionClosed <- true
 		closed := <-c.close
@@ -396,7 +396,7 @@ func (c *client) Write(payload []byte) error {
 		c.slidingWindow <- slidingWindow
 		c.nonAckMsgMap <- nonAckMsgMap
 		c.writeMessage(clientMessage.message)
-		fmt.Printf("2   here sliding window size: %d, buffer size: not buffer, unack size: %d, message: %s\n", len(slidingWindow), len(nonAckMsgMap), clientMessage.message)
+		//fmt.Printf("2   here sliding window size: %d, buffer size: not buffer, unack size: %d, message: %s\n", len(slidingWindow), len(nonAckMsgMap), clientMessage.message)
 
 	} else {
 		c.slidingWindow <- slidingWindow
