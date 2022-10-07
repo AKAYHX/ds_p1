@@ -261,6 +261,7 @@ func (c *client) readMessage() Message {
 func (c *client) handleMessage() {
 	for {
 		message := c.readMessage()
+		//fmt.Println(message.String())
 
 		closed := <-c.close
 		c.close <- closed
@@ -354,19 +355,22 @@ func (c *client) handleDataMsg(msg Message) {
 	dataNum = Max(dataNum, msg.SeqNum)
 	c.largestDataSeqNum <- dataNum
 
-	for {
-		ackNum := <-c.currentProcessedMsgSeqNum
-		c.currentProcessedMsgSeqNum <- ackNum
-		// Process data in order
-		if ackNum < 0 || msg.SeqNum-1 == ackNum {
-			c.readyDataMsg <- msg
-			break
-		}
-	}
+	go func() {
+		// Ack the data
+		ack, _ := json.Marshal(NewAck(c.connID, msg.SeqNum))
+		c.udpConn.Write(ack)
 
-	// Ack the data
-	ack, _ := json.Marshal(NewAck(c.connID, msg.SeqNum))
-	c.udpConn.Write(ack)
+		for {
+			ackNum := <-c.currentProcessedMsgSeqNum
+			c.currentProcessedMsgSeqNum <- ackNum
+			// Process data in order
+			if ackNum < 0 || msg.SeqNum-1 == ackNum {
+				c.readyDataMsg <- msg
+				break
+			}
+		}
+	}()
+
 }
 
 func (c *client) Write(payload []byte) error {
@@ -437,11 +441,10 @@ func (c *client) handleResendMessage() {
 					if msg.resendEpoch == currentEpoch {
 						marshaledMsg, _ := json.Marshal(msg.message)
 						c.udpConn.Write(marshaledMsg)
-
-						c.activateEpoch()
-						msg.backoff *= 2
 						msg.resendEpoch = currentEpoch + msg.backoff
+						msg.backoff *= 2
 						nonAckMsgMap[seqNum] = msg
+						c.activateEpoch()
 					}
 				}
 			}
