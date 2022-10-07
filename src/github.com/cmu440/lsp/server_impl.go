@@ -203,6 +203,15 @@ func (s *server) mainRoutine() {
 				s.unAckReq <- &unAckMsg{client, -1, message, -1, -1, -1}
 			case MsgData:
 				//fmt.Println("msg?")
+				if message.Size != len(message.Payload) {
+					if message.Size > len(message.Payload) {
+						continue
+					}
+					message.Payload = message.Payload[:message.Size]
+				}
+				if message.Checksum != CalculateChecksum(message.ConnID, message.SeqNum, message.Size, message.Payload) {
+					continue
+				}
 				s.ackChan <- msg
 				seq := msg.message.SeqNum
 				s.seqRead <- client
