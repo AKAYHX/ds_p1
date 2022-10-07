@@ -342,7 +342,7 @@ func TestCAckServer1(t *testing.T) {
 }
 
 func TestCAckServer2(t *testing.T) {
-	newMsgTestSystem(t, 5, makeParams(5, 1000, 100, 50)).
+	newMsgTestSystem(t, 1, makeParams(5, 1000, 100, 50)).
 		setDescription("TestCAckServer2: Replaces 50 Acks with one CAck.").
 		runCAckTestServer(false, false, 12, 1000)
 }
