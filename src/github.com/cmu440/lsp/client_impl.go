@@ -341,6 +341,12 @@ func (c *client) updateSlidingWindow(nonAckMsgMap map[int]*ClientMessage) {
 }
 
 func (c *client) handleDataMsg(msg Message) {
+	// Verify if the message is corrupted
+	checksum := CalculateChecksum(c.connID, msg.SeqNum, msg.Size, msg.Payload)
+	if checksum != msg.Checksum {
+		return
+	}
+
 	dataNum := <-c.largestDataSeqNum
 	dataNum = Max(dataNum, msg.SeqNum)
 	c.largestDataSeqNum <- dataNum
