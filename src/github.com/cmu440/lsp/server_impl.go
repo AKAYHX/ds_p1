@@ -5,7 +5,6 @@ package lsp
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"github.com/cmu440/lspnet"
 	"strconv"
 	"time"
@@ -391,7 +390,7 @@ func (s *server) handleWrite() {
 			size := len(writedata.payload)
 			sum := CalculateChecksum(connId, SeqNum, size, payload)
 			message := NewData(connId, SeqNum, size, payload, sum)
-			fmt.Println("towrite: ", message.String())
+			//fmt.Println("towrite: ", message.String())
 			s.unAckReq <- &unAckMsg{client, SeqNum, message, 0, 0, 1}
 		}
 	}
@@ -535,7 +534,7 @@ func (s *server) Read() (int, []byte, error) {
 	if message == nil {
 		return 0, nil, errors.New("client closed")
 	}
-	fmt.Println("read: ", message.String())
+	//fmt.Println("read: ", message.String())
 	return message.ConnID, message.Payload, nil
 }
 
