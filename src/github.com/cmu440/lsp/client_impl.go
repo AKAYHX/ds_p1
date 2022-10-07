@@ -6,7 +6,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"github.com/cmu440/lspnet"
 	"time"
 )
@@ -266,7 +265,7 @@ func (c *client) handleMessage() {
 		closed := <-c.close
 		c.close <- closed
 		if closed {
-			c.readMessageRoutineClosed <- true
+			//c.readMessageRoutineClosed <- true
 			return
 		}
 
@@ -295,14 +294,17 @@ func (c *client) handleAckMsg(message Message) {
 
 func (c *client) handleCAckMsg(msg Message) {
 	nonAckMsgMap := <-c.nonAckMsgMap
+	//fmt.Printf("4   here unack size: %d ack %d\n", len(nonAckMsgMap), msg.SeqNum)
+
 	for seqNum := range nonAckMsgMap {
 		if seqNum <= msg.SeqNum {
-			delete(nonAckMsgMap, msg.SeqNum)
+			delete(nonAckMsgMap, seqNum)
 		}
 	}
 
 	c.updateSlidingWindow(nonAckMsgMap)
 	c.nonAckMsgMap <- nonAckMsgMap
+	//fmt.Printf("5   here unack size: %d\n", len(nonAckMsgMap))
 }
 
 func (c *client) updateSlidingWindow(nonAckMsgMap map[int]*ClientMessage) {
@@ -327,6 +329,7 @@ func (c *client) updateSlidingWindow(nonAckMsgMap map[int]*ClientMessage) {
 		slidingWindow = append(slidingWindow, buffer[i].message.SeqNum)
 		c.writeMessage(buffer[i].message)
 	}
+
 	if i == len(buffer) {
 		buffer = []*ClientMessage{}
 	} else {
@@ -334,7 +337,7 @@ func (c *client) updateSlidingWindow(nonAckMsgMap map[int]*ClientMessage) {
 	}
 	c.writeMessageBuffer <- buffer
 	c.slidingWindow <- slidingWindow
-	fmt.Printf("7   here sliding window size: %d, buffer size: %d, unack size: %d\n", len(slidingWindow), len(buffer), len(nonAckMsgMap))
+	//fmt.Printf("7   here sliding window size: %d, buffer size: %d, unack size: %d\n", len(slidingWindow), len(buffer), len(nonAckMsgMap))
 }
 
 func (c *client) handleDataMsg(msg Message) {
@@ -389,7 +392,7 @@ func (c *client) Write(payload []byte) error {
 			c.slidingWindow <- slidingWindow
 			c.nonAckMsgMap <- nonAckMsgMap
 			c.writeMessage(clientMessage.message)
-			fmt.Printf("2   here sliding window size: %d, buffer size: not buffer, unack size: %d\n", len(slidingWindow), len(nonAckMsgMap))
+			//fmt.Printf("2   here sliding window size: %d, buffer size: not buffer, unack size: %d\n", len(slidingWindow), len(nonAckMsgMap))
 
 		} else {
 			c.slidingWindow <- slidingWindow
@@ -398,7 +401,7 @@ func (c *client) Write(payload []byte) error {
 			buffer := <-c.writeMessageBuffer
 			buffer = append(buffer, clientMessage)
 			c.writeMessageBuffer <- buffer
-			fmt.Printf("3   here sliding window size: %d, buffer size: %d, unack size: %d\n", len(slidingWindow), len(buffer), len(nonAckMsgMap))
+			//fmt.Printf("3   here sliding window size: %d, buffer size: %d, unack size: %d\n", len(slidingWindow), len(buffer), len(nonAckMsgMap))
 		}
 	}()
 
