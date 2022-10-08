@@ -37,8 +37,6 @@ type client struct {
 	nonAckMsgMap chan map[int]*ClientMessage
 	// Sliding window of messages being sent
 	slidingWindow chan []int
-	// Check if there is at least one message being sent in the current epoch
-	activeEpoch chan int
 	// Check the epoch since last message from the server
 	idleEpoch chan int
 	// Stop the client immediately rather than waiting the pending messages to be finished
@@ -83,9 +81,8 @@ func NewClient(hostport string, initialSeqNum int, params *Params) (Client, erro
 		readyDataMsg:              make(chan Message),
 		epochTimeout:              make(chan int),
 		nonAckMsgMap:              make(chan map[int]*ClientMessage, 1),
-		activeEpoch:               make(chan int, 1),
 		idleEpoch:                 make(chan int, 1),
-		connectionClosed:          make(chan bool, 1),
+		connectionClosed:          make(chan bool),
 		slidingWindow:             make(chan []int, 1),
 		writeMessageBuffer:        make(chan []*ClientMessage, 1),
 		currentEpoch:              make(chan int, 1),
@@ -98,13 +95,11 @@ func NewClient(hostport string, initialSeqNum int, params *Params) (Client, erro
 	cli.currentProcessedMsgSeqNum <- 0
 	cli.largestDataSeqNum <- -1
 	cli.nonAckMsgMap <- make(map[int]*ClientMessage)
-	cli.activeEpoch <- 0
 	cli.idleEpoch <- 0
 	cli.slidingWindow <- []int{}
 	cli.writeMessageBuffer <- []*ClientMessage{}
 	cli.currentEpoch <- 0
 	cli.largestReadMsgSeqNum <- -1
-	cli.connectionClosed <- false
 
 	epoch := 0
 	for {
@@ -181,13 +176,7 @@ func (c *client) epochTimer() {
 
 			go func() {
 				// Send heart beat if no message sent during this epoch
-				select {
-				case active := <-c.activeEpoch:
-					c.activeEpoch <- 0
-					if active == 0 {
-						c.sendHeartBeat()
-					}
-				}
+				c.sendHeartBeat()
 
 				// Close the connection if the idle epoch exceed the limit
 				select {
@@ -200,7 +189,10 @@ func (c *client) epochTimer() {
 						c.idleEpoch <- idleEpoch + 1
 					}
 					if idleEpoch+1 > c.params.EpochLimit {
-						<-c.connectionClosed
+						select {
+						case <-c.connectionClosed:
+						default:
+						}
 						c.connectionClosed <- true
 						<-c.closing
 						c.closing <- true
@@ -221,7 +213,15 @@ func (c *client) sendHeartBeat() {
 	if closed {
 		return
 	}
-	c.udpConn.Write(ack)
+	_, err := c.udpConn.Write(ack)
+	// Detect the closeness of server
+	if err != nil {
+		select {
+		case <-c.connectionClosed:
+		default:
+		}
+		c.connectionClosed <- true
+	}
 }
 
 func (c *client) ConnID() int {
@@ -237,26 +237,34 @@ func (c *client) Read() ([]byte, error) {
 	}
 
 	for {
-		connectionClosed := <-c.connectionClosed
-		if connectionClosed {
-			// All read data msg have been ack-ed
+		select {
+		case msg := <-c.readyDataMsg:
+			<-c.largestReadMsgSeqNum
+			c.largestReadMsgSeqNum <- msg.SeqNum
+
+			return msg.Payload, nil
+		case <- c.connectionClosed:
+			//c.connectionClosed <- true
 			largestDataSeqNum := <-c.largestDataSeqNum
 			c.largestDataSeqNum <- largestDataSeqNum
 			largestReadMsgSeqNum := <-c.largestReadMsgSeqNum
 			c.largestReadMsgSeqNum <- largestReadMsgSeqNum
 
+			//fmt.Printf("seq %d %d\n", largestDataSeqNum, largestReadMsgSeqNum)
 			if largestReadMsgSeqNum == largestDataSeqNum {
-				c.connectionClosed <- connectionClosed
 				return nil, errors.New(fmt.Sprintf("client %d the connection is closed", c.connID))
 			}
-		}
-		c.connectionClosed <- connectionClosed
-
-		select {
-		case msg := <-c.readyDataMsg:
-			<-c.largestReadMsgSeqNum
-			c.largestReadMsgSeqNum <- msg.SeqNum
-			return msg.Payload, nil
+			select {
+			case msg := <-c.readyDataMsg:
+				<-c.largestReadMsgSeqNum
+				c.largestReadMsgSeqNum <- msg.SeqNum
+				return msg.Payload, nil
+			case finalClosed := <-c.finalClose:
+				c.finalClose <- finalClosed
+				if finalClosed {
+					return nil, errors.New(fmt.Sprintf("client %d the connection is closed", c.connID))
+				}
+			}
 		}
 	}
 }
@@ -269,8 +277,6 @@ func (c *client) readMessage() Message {
 	bytes, err := bufio.NewReader(c.udpConn).Read(buffer)
 
 	if err != nil {
-		<-c.connectionClosed
-		c.connectionClosed <- true
 		closed := <-c.closing
 		closed = true
 		c.closing <- closed
@@ -291,6 +297,7 @@ func (c *client) readMessage() Message {
 func (c *client) handleMessage() {
 	for {
 		message := c.readMessage()
+		//fmt.Println("client received: "+message.String())
 
 		finalClose := <-c.finalClose
 		c.finalClose <- finalClose
@@ -311,6 +318,7 @@ func (c *client) handleMessage() {
 				dataNum = Max(dataNum, message.SeqNum)
 				c.largestDataSeqNum <- dataNum
 
+				//fmt.Printf("update largest data seq num %d\n", dataNum)
 				// Handle data
 				c.handleDataMsg(message)
 			}
@@ -398,9 +406,9 @@ func (c *client) handleDataMsg(msg Message) {
 			ackNum := <-c.currentProcessedMsgSeqNum
 			// Process data in order
 			if msg.SeqNum-1 == ackNum {
+				c.readyDataMsg <- msg
 				ackNum = msg.SeqNum
 				c.currentProcessedMsgSeqNum <- ackNum
-				c.readyDataMsg <- msg
 				break
 			}
 			c.currentProcessedMsgSeqNum <- ackNum
@@ -454,7 +462,7 @@ func (c *client) Write(payload []byte) error {
 func (c *client) writeMessage(message *Message) {
 	marshaledMsg, _ := json.Marshal(message)
 	c.udpConn.Write(marshaledMsg)
-	c.activateEpoch()
+	//c.activateEpoch()
 }
 
 // Go Routine for resending messages
@@ -484,7 +492,7 @@ func (c *client) handleResendMessage() {
 						msg.backoff = Min(msg.backoff, c.params.MaxBackOffInterval)
 						msg.resendEpoch = currentEpoch + msg.backoff + 1
 						nonAckMsgMap[seqNum] = msg
-						c.activateEpoch()
+						//c.activateEpoch()
 					}
 				}
 			}
@@ -493,18 +501,8 @@ func (c *client) handleResendMessage() {
 	}
 }
 
-func (c *client) activateEpoch() {
-	active := <-c.activeEpoch
-	active = 1
-	c.activeEpoch <- active
-}
-
 func (c *client) Close() error {
 	closed := <-c.closing
-	if closed {
-		c.closing <- closed
-		return nil
-	}
 	closed = true
 	c.closing <- closed
 
@@ -525,9 +523,9 @@ func (c *client) Close() error {
 		// All read data msg have been ack-ed
 		largestDataSeqNum := <-c.largestDataSeqNum
 		c.largestDataSeqNum <- largestDataSeqNum
-		currentProcessedMsgSeqNum := <-c.currentProcessedMsgSeqNum
-		c.currentProcessedMsgSeqNum <- currentProcessedMsgSeqNum
-		if largestDataSeqNum > currentProcessedMsgSeqNum {
+		largestReadMsgSeqNum := <-c.largestReadMsgSeqNum
+		c.largestReadMsgSeqNum <- largestReadMsgSeqNum
+		if largestDataSeqNum > largestReadMsgSeqNum {
 			continue
 		}
 		break
