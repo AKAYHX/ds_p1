@@ -237,26 +237,26 @@ func (c *client) Read() ([]byte, error) {
 	}
 
 	for {
-		connectionClosed := <-c.connectionClosed
-		if connectionClosed {
-			// All read data msg have been ack-ed
-			largestDataSeqNum := <-c.largestDataSeqNum
-			c.largestDataSeqNum <- largestDataSeqNum
-			largestReadMsgSeqNum := <-c.largestReadMsgSeqNum
-			c.largestReadMsgSeqNum <- largestReadMsgSeqNum
-
-			if largestReadMsgSeqNum == largestDataSeqNum {
-				c.connectionClosed <- connectionClosed
-				return nil, errors.New(fmt.Sprintf("client %d the connection is closed", c.connID))
-			}
-		}
-		c.connectionClosed <- connectionClosed
-
 		select {
 		case msg := <-c.readyDataMsg:
 			<-c.largestReadMsgSeqNum
 			c.largestReadMsgSeqNum <- msg.SeqNum
 			return msg.Payload, nil
+		default:
+			connectionClosed := <-c.connectionClosed
+			if connectionClosed {
+				c.connectionClosed <- connectionClosed
+				// All read data msg have been ack-ed
+				largestDataSeqNum := <-c.largestDataSeqNum
+				c.largestDataSeqNum <- largestDataSeqNum
+				largestReadMsgSeqNum := <-c.largestReadMsgSeqNum
+				c.largestReadMsgSeqNum <- largestReadMsgSeqNum
+
+				if largestReadMsgSeqNum == largestDataSeqNum {
+					return nil, errors.New(fmt.Sprintf("client %d the connection is closed", c.connID))
+				}
+			}
+			c.connectionClosed <- connectionClosed
 		}
 	}
 }
@@ -411,8 +411,8 @@ func (c *client) handleDataMsg(msg Message) {
 
 // Write function called by the server
 func (c *client) Write(payload []byte) error {
-	closed := <-c.finalClose
-	c.finalClose <- closed
+	closed := <-c.closing
+	c.closing <- closed
 	if closed {
 		return errors.New("the client is closed")
 	}
