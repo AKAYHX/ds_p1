@@ -15,132 +15,223 @@ const Maxsize = 2000
 
 //server struct
 type server struct {
-	conn               *lspnet.UDPConn
-	addr               *lspnet.UDPAddr
-	readChan           chan *readMsg
-	writeChan          chan *Msg
-	preWriteChan       chan *writeData
-	outChan            chan *Message
-	connectChan        chan *readMsg
-	clients            map[int]*serverClient //client map
-	id                 int
-	ackChan            chan *Msg
-	closeMain          chan bool
-	closeRead          chan bool
-	closeWrite         chan bool
-	closeBuffer        chan bool
-	closeConnect       chan bool
-	closeAck           chan bool
-	closeSeqNum        chan bool
-	closeMsg           chan bool
-	bufferChan         chan *serverClient
-	seqAdd             chan *serverClient
-	seqRead            chan *serverClient
-	seqRes             chan int
-	writeMsg           chan *writeClient
-	readMsg            chan *readClient
-	resMsg             chan *Message
-	EpochLimit         int
-	EpochMillis        int
-	WindowSize         int
+	//udp connection
+	conn *lspnet.UDPConn
+	//udp addr
+	addr *lspnet.UDPAddr
+	//received to main routine
+	readChan chan *readMsg
+	//write chan
+	writeChan chan *Msg
+	//before write chan
+	preWriteChan chan *writeData
+	//read to chan
+	outChan chan *Message
+	//do connect chan
+	connectChan chan *readMsg
+	//clients map
+	clients map[int]*serverClient
+	//server id
+	id int
+	//ack msg chan
+	ackChan chan *Msg
+	//close main chan
+	closeMain chan bool
+	//close read chan
+	closeRead chan bool
+	//close write chan
+	closeWrite chan bool
+	//close buffer chan
+	closeBuffer chan bool
+	//close conn chan
+	closeConnect chan bool
+	//close ack chan
+	closeAck chan bool
+	//close seqnum chan
+	closeSeqNum chan bool
+	//close msg chan to sent
+	closeMsg chan bool
+	//buffer chan
+	bufferChan chan *serverClient
+	//to add seqnum chan
+	seqAdd chan *serverClient
+	//to read seqnum chan
+	seqRead chan *serverClient
+	//get read result chan
+	seqRes chan int
+	//write to chan
+	writeMsg chan *writeClient
+	//read to buffer chan
+	readMsg chan *readClient
+	//read result chan
+	resMsg chan *Message
+	//EpochLimit
+	EpochLimit int
+	//EpochMillis
+	EpochMillis int
+	//WindowSize
+	WindowSize int
+	//MaxBackOffInterval
 	MaxBackOffInterval int
+	//MaxUnackedMessages
 	MaxUnackedMessages int
-	clientBuffer       chan int
-	closeunAckRoutine  chan bool
-	serverseqAdd       chan *serverClient
-	serverseqRead      chan *serverClient
-	serverseqRes       chan int
-	clientWinReq       chan *clientWindow
-	clientWinRes       chan int
-	unAckReq           chan *unAckMsg
-	closehandleWrite   chan bool
-	closeEpoch         chan bool
-	closeclient        chan int
-	closed             bool
-	closeReply         chan bool
-	closeunAck         chan bool
-	hadclient          bool
-	buffer             []*Message //buffer msg before read
-	readRequest        chan bool
-	readResponse       chan *Message
-	closebeforeRead    chan bool
+	// to buffer chan
+	clientBuffer chan int
+	//close ack chan
+	closeunAckRoutine chan bool
+	//server seq add chan
+	serverseqAdd chan *serverClient
+	//server seq read chan
+	serverseqRead chan *serverClient
+	//server seq result chan
+	serverseqRes chan int
+	//client window chan
+	clientWinReq chan *clientWindow
+	//client window chan
+	clientWinRes chan int
+	//unack msg chan
+	unAckReq chan *unAckMsg
+	//close handlewrite chan
+	closehandleWrite chan bool
+	//close epoch chan
+	closeEpoch chan bool
+	//close client chan
+	closeclient chan int
+	//server closed
+	closed bool
+	//get close reply chan
+	closeReply chan bool
+	//close unack msg chan
+	closeunAck chan bool
+	//hadclient
+	hadclient bool
+	//buffer msg before read
+	buffer []*Message
+	//read request chan
+	readRequest chan bool
+	//read result chan
+	readResponse chan *Message
+	//close chan
+	closebeforeRead chan bool
+	//close chan
 	closeclientRoutine chan bool
-	clientModify       chan *clientInfo
-	clientRes          chan int
-	clientsChan        chan *serverClient
-	epochChan          chan *serverClient
-	towriteChan        chan *unAckMsg
-	closeconnChan      chan bool
-	getClient          chan int
-	returnClient       chan *serverClient
+	//client modify chan
+	clientModify chan *clientInfo
+	//client result chan
+	clientRes chan int
+	//clients chan
+	clientsChan chan *serverClient
+	//epoch chan
+	epochChan chan *serverClient
+	//to write chan
+	towriteChan chan *unAckMsg
+	//close conn chan
+	closeconnChan chan bool
+	//get client chan
+	getClient chan int
+	//return chan
+	returnClient chan *serverClient
 }
 
 type serverClient struct {
-	id           int
-	SeqNum       int
-	addr         *lspnet.UDPAddr
-	msgList      map[int]*Message //msg to be read
-	closed       bool
+	//client id
+	id int
+	//client seqnum
+	SeqNum int
+	//client addr
+	addr *lspnet.UDPAddr
+	//msg to be read
+	msgList map[int]*Message
+	//client closed
+	closed bool
+	//seqnum
 	serverSeqNum int
-	unAcked      []*unAckMsg // unacked msg
-	buffer       []*Msg      // buffer msg to write
-	left         int
-	sent         bool
-	heard        int
+	// unacked msg
+	unAcked []*unAckMsg
+	// buffer msg to write
+	buffer []*Msg
+	//window left
+	left int
+	//if sent last epoch
+	sent bool
+	//if heard last epoch
+	heard int
 }
 
 //client info
 type clientInfo struct {
+	//client
 	client *serverClient
+	//client action
 	action string
 }
 
 //for read channel
 type readMsg struct {
-	addr    *lspnet.UDPAddr
+	// client addr
+	addr *lspnet.UDPAddr
+	//msg
 	message *Message
 }
 
 //msg to transmit
 type Msg struct {
-	client  *serverClient
-	addr    *lspnet.UDPAddr
+	//client
+	client *serverClient
+	//client addr
+	addr *lspnet.UDPAddr
+	//msg
 	message *Message
 }
 
 //to write data
 type writeData struct {
-	connId  int
+	//id
+	connId int
+	//content
 	payload []byte
 }
 
 //client+seqnum
 type readClient struct {
+	//client
 	client *serverClient
-	seq    int
+	//seqnum
+	seq int
 }
 
 //write client msg
 type writeClient struct {
-	client  *serverClient
-	seq     int
+	//client
+	client *serverClient
+	//seqnum
+	seq int
+	//msg
 	message *Message
 }
 
 //client+num
 type clientWindow struct {
+	//client
 	client *serverClient
-	num    int
+	//seqnum
+	num int
 }
 
 //unacked msg
 type unAckMsg struct {
-	client         *serverClient
-	seq            int
-	message        *Message
+	//client
+	client *serverClient
+	//seqnum
+	seq int
+	//msg
+	message *Message
+	//CurrentBackoff
 	CurrentBackoff int
-	epoch          int
-	add            int
+	//curr epoch
+	epoch int
+	// epoch to be added
+	add int
 }
 
 // NewServer creates, initiates, and returns a new server. This function should
