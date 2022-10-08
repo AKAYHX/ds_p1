@@ -25,7 +25,7 @@ type client struct {
 	// Detect and notify when the connection is closed
 	connectionClosed chan bool
 	// Signal that all should be closed
-	finalClose           chan bool
+	finalClose chan bool
 	// related params
 	params *Params
 	// Current sent seq num
@@ -91,7 +91,7 @@ func NewClient(hostport string, initialSeqNum int, params *Params) (Client, erro
 		currentEpoch:              make(chan int, 1),
 		finalClose:                make(chan bool, 1),
 		largestReadMsgSeqNum:      make(chan int, 1),
-		readyDataMsgCache: make(chan []Message, 1),
+		readyDataMsgCache:         make(chan []Message, 1),
 	}
 	cli.closing <- false
 	cli.finalClose <- false
@@ -249,13 +249,13 @@ func (c *client) Read() ([]byte, error) {
 			// A message is ready to read (in order)
 			msgList := <-c.readyDataMsgCache
 			msg := msgList[0]
-			c.readyDataMsgCache <-msgList[1:]
+			c.readyDataMsgCache <- msgList[1:]
 
 			<-c.largestReadMsgSeqNum
 			c.largestReadMsgSeqNum <- msg.SeqNum
 
 			return msg.Payload, nil
-		case <- c.connectionClosed:
+		case <-c.connectionClosed:
 			// Check if all messages have been processed
 			largestDataSeqNum := <-c.largestDataSeqNum
 			c.largestDataSeqNum <- largestDataSeqNum
@@ -271,7 +271,7 @@ func (c *client) Read() ([]byte, error) {
 			case <-c.dataMsgReady:
 				msgList := <-c.readyDataMsgCache
 				msg := msgList[0]
-				c.readyDataMsgCache <-msgList[1:]
+				c.readyDataMsgCache <- msgList[1:]
 
 				<-c.largestReadMsgSeqNum
 				c.largestReadMsgSeqNum <- msg.SeqNum
@@ -426,7 +426,7 @@ func (c *client) handleDataMsg(msg Message) {
 			if msg.SeqNum-1 == ackNum {
 				msgList := <-c.readyDataMsgCache
 				msgList = append(msgList, msg)
-				c.readyDataMsgCache <-msgList
+				c.readyDataMsgCache <- msgList
 
 				ackNum = msg.SeqNum
 				c.currentProcessedMsgSeqNum <- ackNum
