@@ -49,6 +49,7 @@ type client struct {
 	currentEpoch chan int
 	// Signal that all should be closed
 	finalClose           chan bool
+	// Largest msg seq num that has read
 	largestReadMsgSeqNum chan int
 }
 
@@ -128,6 +129,7 @@ func NewClient(hostport string, initialSeqNum int, params *Params) (Client, erro
 	return nil, errors.New("exceed EpochLimit")
 }
 
+// Set up connection with the server
 func (c *client) setupConnection(initialSeqNum int, hostport string) bool {
 	addr, err := lspnet.ResolveUDPAddr("udp", hostport)
 	if err != nil {
@@ -161,6 +163,7 @@ func (c *client) setupConnection(initialSeqNum int, hostport string) bool {
 	return false
 }
 
+// The go routine to set up epoch timer.
 func (c *client) epochTimer() {
 	for {
 		finalClosed := <-c.finalClose
@@ -177,6 +180,7 @@ func (c *client) epochTimer() {
 			c.epochTimeout <- currentEpoch
 
 			go func() {
+				// Send heart beat if no message sent during this epoch
 				select {
 				case active := <-c.activeEpoch:
 					c.activeEpoch <- 0
@@ -185,6 +189,7 @@ func (c *client) epochTimer() {
 					}
 				}
 
+				// Close the connection if the idle epoch exceed the limit
 				select {
 				case idleEpoch := <-c.idleEpoch:
 					if idleEpoch < 0 {
@@ -207,6 +212,7 @@ func (c *client) epochTimer() {
 	}
 }
 
+// Send heart beat
 func (c *client) sendHeartBeat() {
 	ack, _ := json.Marshal(NewAck(c.connID, 0))
 
@@ -222,6 +228,7 @@ func (c *client) ConnID() int {
 	return c.connID
 }
 
+// Read function called by the server
 func (c *client) Read() ([]byte, error) {
 	closed := <-c.finalClose
 	c.finalClose <- closed
@@ -231,12 +238,12 @@ func (c *client) Read() ([]byte, error) {
 
 	for {
 		connectionClosed := <-c.connectionClosed
-		if connectionClosed { // All read data msg have been ack-ed
+		if connectionClosed {
+			// All read data msg have been ack-ed
 			largestDataSeqNum := <-c.largestDataSeqNum
 			c.largestDataSeqNum <- largestDataSeqNum
 			largestReadMsgSeqNum := <-c.largestReadMsgSeqNum
 			c.largestReadMsgSeqNum <- largestReadMsgSeqNum
-			fmt.Printf("largestReadMsgSeqNum %d %d \n", largestReadMsgSeqNum, largestDataSeqNum)
 
 			if largestReadMsgSeqNum == largestDataSeqNum {
 				c.connectionClosed <- connectionClosed
@@ -247,28 +254,14 @@ func (c *client) Read() ([]byte, error) {
 
 		select {
 		case msg := <-c.readyDataMsg:
-			fmt.Println("client process msg: " + msg.String())
 			<-c.largestReadMsgSeqNum
 			c.largestReadMsgSeqNum <- msg.SeqNum
 			return msg.Payload, nil
-			//case <-c.connectionClosed:
-			//	// All read data msg have been ack-ed
-			//	largestDataSeqNum := <-c.largestDataSeqNum
-			//	c.largestDataSeqNum <- largestDataSeqNum
-			//	largestReadMsgSeqNum := <-c.largestReadMsgSeqNum
-			//	c.largestReadMsgSeqNum <- largestReadMsgSeqNum
-			//	fmt.Printf("largestReadMsgSeqNum %d %d \n", largestReadMsgSeqNum, largestDataSeqNum)
-			//
-			//	if largestDataSeqNum > largestReadMsgSeqNum {
-			//		c.connectionClosed <- true
-			//		continue
-			//	}
-			//
-			//	return nil, errors.New(fmt.Sprintf("client %d the connection is closed", c.connID))
 		}
 	}
 }
 
+// Receive message from the server
 func (c *client) readMessage() Message {
 	var response Message
 
@@ -294,10 +287,10 @@ func (c *client) readMessage() Message {
 	return response
 }
 
+// Handle incoming message routine
 func (c *client) handleMessage() {
 	for {
 		message := c.readMessage()
-		fmt.Printf("client %d receive: %s\n", c.connID, message.String())
 
 		finalClose := <-c.finalClose
 		c.finalClose <- finalClose
@@ -313,7 +306,7 @@ func (c *client) handleMessage() {
 				// Handle CAck
 				c.handleCAckMsg(message)
 			} else if message.Type == MsgData {
-
+				// Update the largest message which needs to be processed
 				dataNum := <-c.largestDataSeqNum
 				dataNum = Max(dataNum, message.SeqNum)
 				c.largestDataSeqNum <- dataNum
@@ -325,6 +318,7 @@ func (c *client) handleMessage() {
 	}
 }
 
+// Handle ack msg
 func (c *client) handleAckMsg(message Message) {
 	nonAckMsgMap := <-c.nonAckMsgMap
 	delete(nonAckMsgMap, message.SeqNum)
@@ -332,6 +326,7 @@ func (c *client) handleAckMsg(message Message) {
 	c.nonAckMsgMap <- nonAckMsgMap
 }
 
+// Handle CAck
 func (c *client) handleCAckMsg(msg Message) {
 	nonAckMsgMap := <-c.nonAckMsgMap
 
@@ -345,6 +340,7 @@ func (c *client) handleCAckMsg(msg Message) {
 	c.nonAckMsgMap <- nonAckMsgMap
 }
 
+// Update sliding window and nonAckMsgMap. Put exceeded msg into buffer.
 func (c *client) updateSlidingWindow(nonAckMsgMap map[int]*ClientMessage) {
 	oldSlidingWindow := <-c.slidingWindow
 	var slidingWindow []int
@@ -355,8 +351,9 @@ func (c *client) updateSlidingWindow(nonAckMsgMap map[int]*ClientMessage) {
 			break
 		}
 	}
+
+	// Put message into buffer if needed
 	buffer := <-c.writeMessageBuffer
-	//fmt.Printf("6   here sliding window size: %d, buffer size: %d, unack size: %d\n", len(slidingWindow), len(buffer), len(nonAckMsgMap))
 	i := 0
 	for ; i < len(buffer); i++ {
 		if len(slidingWindow) >= c.params.WindowSize ||
@@ -375,9 +372,9 @@ func (c *client) updateSlidingWindow(nonAckMsgMap map[int]*ClientMessage) {
 	}
 	c.writeMessageBuffer <- buffer
 	c.slidingWindow <- slidingWindow
-	//fmt.Printf("7   here sliding window size: %d, buffer size: %d, unack size: %d\n", len(slidingWindow), len(buffer), len(nonAckMsgMap))
 }
 
+// Handle Data msg
 func (c *client) handleDataMsg(msg Message) {
 	// Handle variable length
 	if len(msg.Payload) < msg.Size {
@@ -412,6 +409,7 @@ func (c *client) handleDataMsg(msg Message) {
 
 }
 
+// Write function called by the server
 func (c *client) Write(payload []byte) error {
 	closed := <-c.finalClose
 	c.finalClose <- closed
@@ -425,7 +423,6 @@ func (c *client) Write(payload []byte) error {
 
 	currentEpoch := <-c.currentEpoch
 	c.currentEpoch <- currentEpoch
-
 	clientMessage := &ClientMessage{message: NewData(c.connID, seqNum, len(payload), payload,
 		CalculateChecksum(c.connID, seqNum, len(payload), payload)), backoff: 0, resendEpoch: currentEpoch + 1}
 
@@ -433,33 +430,34 @@ func (c *client) Write(payload []byte) error {
 	slidingWindow := <-c.slidingWindow
 	if len(nonAckMsgMap) < c.params.MaxUnackedMessages &&
 		len(slidingWindow) < c.params.WindowSize {
+		// Can be written right now
 		slidingWindow = append(slidingWindow, seqNum)
 		nonAckMsgMap[seqNum] = clientMessage
 		c.slidingWindow <- slidingWindow
 		c.nonAckMsgMap <- nonAckMsgMap
 		c.writeMessage(clientMessage.message)
-		//fmt.Printf("2   here sliding window size: %d, buffer size: not buffer, unack size: %d, message: %s\n", len(slidingWindow), len(nonAckMsgMap), clientMessage.message)
 
 	} else {
+		// Cannot be sent
 		c.slidingWindow <- slidingWindow
 		c.nonAckMsgMap <- nonAckMsgMap
 
 		buffer := <-c.writeMessageBuffer
 		buffer = append(buffer, clientMessage)
 		c.writeMessageBuffer <- buffer
-		//fmt.Printf("3   here sliding window size: %d, buffer size: %d, unack size: %d\n", len(slidingWindow), len(buffer), len(nonAckMsgMap))
 	}
 
 	return nil
 }
 
+// Send message to the server
 func (c *client) writeMessage(message *Message) {
 	marshaledMsg, _ := json.Marshal(message)
 	c.udpConn.Write(marshaledMsg)
-	//fmt.Println("client write "+message.String())
 	c.activateEpoch()
 }
 
+// Go Routine for resending messages
 func (c *client) handleResendMessage() {
 	for {
 		closed := <-c.finalClose
@@ -478,7 +476,6 @@ func (c *client) handleResendMessage() {
 					if msg.resendEpoch <= currentEpoch {
 						marshaledMsg, _ := json.Marshal(msg.message)
 						c.udpConn.Write(marshaledMsg)
-						//fmt.Println("client re write "+msg.message.String())
 						if msg.backoff == 0 {
 							msg.backoff = 1
 						} else {
