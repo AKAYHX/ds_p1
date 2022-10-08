@@ -29,8 +29,6 @@ type client struct {
 	currentProcessedMsgSeqNum chan int
 	// Current data msg
 	largestDataSeqNum chan int
-	// Waited to be process data message
-	readyDataMsg chan Message
 	// Notify the current epoch
 	epochTimeout chan int
 	// Map of non-acked message {seq num: message}
@@ -49,6 +47,10 @@ type client struct {
 	finalClose           chan bool
 	// Largest msg seq num that has read
 	largestReadMsgSeqNum chan int
+	// Waited to be process data message
+	dataMsgReady chan bool
+	// Cache all ready to process message in order
+	readyDataMsgCache chan []Message
 }
 
 type ClientMessage struct {
@@ -78,7 +80,7 @@ func NewClient(hostport string, initialSeqNum int, params *Params) (Client, erro
 		currentSeqNum:             make(chan int, 1),
 		currentProcessedMsgSeqNum: make(chan int, 1),
 		largestDataSeqNum:         make(chan int, 1),
-		readyDataMsg:              make(chan Message),
+		dataMsgReady:              make(chan bool),
 		epochTimeout:              make(chan int),
 		nonAckMsgMap:              make(chan map[int]*ClientMessage, 1),
 		idleEpoch:                 make(chan int, 1),
@@ -88,6 +90,7 @@ func NewClient(hostport string, initialSeqNum int, params *Params) (Client, erro
 		currentEpoch:              make(chan int, 1),
 		finalClose:                make(chan bool, 1),
 		largestReadMsgSeqNum:      make(chan int, 1),
+		readyDataMsgCache: make(chan []Message, 1),
 	}
 	cli.closing <- false
 	cli.finalClose <- false
@@ -100,6 +103,7 @@ func NewClient(hostport string, initialSeqNum int, params *Params) (Client, erro
 	cli.writeMessageBuffer <- []*ClientMessage{}
 	cli.currentEpoch <- 0
 	cli.largestReadMsgSeqNum <- -1
+	cli.readyDataMsgCache <- []Message{}
 
 	epoch := 0
 	for {
@@ -217,7 +221,7 @@ func (c *client) sendHeartBeat() {
 	// Detect the closeness of server
 	if err != nil {
 		select {
-		case <-c.connectionClosed:
+		case closed = <-c.connectionClosed:
 		default:
 		}
 		c.connectionClosed <- true
@@ -238,7 +242,11 @@ func (c *client) Read() ([]byte, error) {
 
 	for {
 		select {
-		case msg := <-c.readyDataMsg:
+		case <-c.dataMsgReady:
+			msgList := <-c.readyDataMsgCache
+			msg := msgList[0]
+			c.readyDataMsgCache <-msgList[1:]
+
 			<-c.largestReadMsgSeqNum
 			c.largestReadMsgSeqNum <- msg.SeqNum
 
@@ -255,9 +263,14 @@ func (c *client) Read() ([]byte, error) {
 				return nil, errors.New(fmt.Sprintf("client %d the connection is closed", c.connID))
 			}
 			select {
-			case msg := <-c.readyDataMsg:
+			case <-c.dataMsgReady:
+				msgList := <-c.readyDataMsgCache
+				msg := msgList[0]
+				c.readyDataMsgCache <-msgList[1:]
+
 				<-c.largestReadMsgSeqNum
 				c.largestReadMsgSeqNum <- msg.SeqNum
+
 				return msg.Payload, nil
 			case finalClosed := <-c.finalClose:
 				c.finalClose <- finalClosed
@@ -406,9 +419,13 @@ func (c *client) handleDataMsg(msg Message) {
 			ackNum := <-c.currentProcessedMsgSeqNum
 			// Process data in order
 			if msg.SeqNum-1 == ackNum {
-				c.readyDataMsg <- msg
+				msgList := <-c.readyDataMsgCache
+				msgList = append(msgList, msg)
+				c.readyDataMsgCache <-msgList
+
 				ackNum = msg.SeqNum
 				c.currentProcessedMsgSeqNum <- ackNum
+				c.dataMsgReady <- true
 				break
 			}
 			c.currentProcessedMsgSeqNum <- ackNum
