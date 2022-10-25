@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	MaxPacketSize = 1000
-	MilliToNano   = 1000000
+	MaxPacketSize      = 1000
+	MilliToNano        = 1000000
 	DisconnectErrorMsg = "disconnected"
 )
 

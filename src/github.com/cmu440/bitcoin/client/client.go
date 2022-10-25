@@ -19,10 +19,10 @@ var LOGF *log.Logger
 func main() {
 	// You may need a logger for debug purpose
 	const (
-		name = "clientLog.txt"
-		flag = os.O_RDWR | os.O_CREATE
-		perm = os.FileMode(0666)
-		disconnectErrorMsg = "Disconnected"
+		name               = "clientLog.txt"
+		flag               = os.O_RDWR | os.O_CREATE
+		perm               = os.FileMode(0666)
+		disconnectErrorMsg = "disconnected"
 	)
 
 	file, err := os.OpenFile(name, flag, perm)

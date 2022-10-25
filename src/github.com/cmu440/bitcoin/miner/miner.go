@@ -87,7 +87,7 @@ func main() {
 		// Exhausts all possible nonces
 		nonce := message.Lower
 		hash := ^uint64(0)
-		for i := message.Lower; i <= message.Upper; i ++ {
+		for i := message.Lower; i <= message.Upper; i++ {
 			tmpHash := bitcoin.Hash(message.Data, i)
 			if tmpHash < hash {
 				hash = tmpHash
