@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"github.com/cmu440/bitcoin"
 	"log"
 	"math"
 	"math/rand"
@@ -18,8 +20,24 @@ func joinWithServer(hostport string) (lsp.Client, error) {
 	isn := rand.New(seed).Intn(int(math.Pow(2, 8)))
 
 	// TODO: implement this!
+	client, err := lsp.NewClient(hostport, isn, lsp.NewParams())
+	if err != nil {
+		fmt.Println("Failed to connect to server:", err)
+		return nil, err
+	}
 
-	return nil, nil
+	// Miner sends join request
+	payload, err := json.Marshal(bitcoin.NewJoin())
+	if err != nil {
+		return nil, err
+	}
+	err = client.Write(payload)
+	if err != nil {
+		fmt.Println("Failed to send join request")
+		return nil, err
+	}
+
+	return client, nil
 }
 
 var LOGF *log.Logger
@@ -54,4 +72,31 @@ func main() {
 	defer miner.Close()
 
 	// TODO: implement this!
+	for {
+		request, err := miner.Read()
+		if err != nil {
+			return
+		}
+
+		var message bitcoin.Message
+		json.Unmarshal(request, &message)
+		if message.Type != bitcoin.Request {
+			continue
+		}
+
+		// Exhausts all possible nonces
+		nonce := message.Lower
+		hash := ^uint64(0)
+		for i := message.Lower; i <= message.Upper; i ++ {
+			tmpHash := bitcoin.Hash(message.Data, i)
+			if tmpHash < hash {
+				hash = tmpHash
+				nonce = hash
+			}
+		}
+
+		// Return the least hash value
+		response, _ := json.Marshal(bitcoin.NewResult(hash, nonce))
+		miner.Write(response)
+	}
 }
