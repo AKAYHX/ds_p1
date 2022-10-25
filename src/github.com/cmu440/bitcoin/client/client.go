@@ -63,17 +63,17 @@ func main() {
 	err = client.Write(payload)
 	if err != nil {
 		printDisconnected()
-		file.WriteString("Failed to send request. Error: " + err.Error())
+		file.WriteString("Failed to send request. Error: " + err.Error() + "\n")
 		return
 	}
 
 	// Read response from the server
 	response, err := client.Read()
 	if err != nil {
+		file.WriteString("Failed to read. Error: " + err.Error())
 		if err.Error() == disconnectErrorMsg {
 			printDisconnected()
 		}
-		file.WriteString("Failed to read. Error: " + err.Error())
 		return
 	}
 	var responseMsg bitcoin.Message
