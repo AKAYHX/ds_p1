@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"github.com/cmu440/bitcoin"
 	"log"
 	"math"
 	"math/rand"
@@ -17,9 +19,10 @@ var LOGF *log.Logger
 func main() {
 	// You may need a logger for debug purpose
 	const (
-		name = "clientLog.txt"
-		flag = os.O_RDWR | os.O_CREATE
-		perm = os.FileMode(0666)
+		name               = "clientLog.txt"
+		flag               = os.O_RDWR | os.O_CREATE
+		perm               = os.FileMode(0666)
+		disconnectErrorMsg = "disconnected"
 	)
 
 	file, err := os.OpenFile(name, flag, perm)
@@ -51,11 +54,32 @@ func main() {
 
 	defer client.Close()
 
-	_ = message  // Keep compiler happy. Please remove!
-	_ = maxNonce // Keep compiler happy. Please remove!
 	// TODO: implement this!
+	// Send request to the server
+	payload, err := json.Marshal(bitcoin.NewRequest(message, 0, maxNonce))
+	if err != nil {
+		return
+	}
+	err = client.Write(payload)
+	if err != nil {
+		printDisconnected()
+		file.WriteString("Failed to send request. Error: " + err.Error() + "\n")
+		return
+	}
 
-	printResult(0, 0)
+	// Read response from the server
+	response, err := client.Read()
+	if err != nil {
+		file.WriteString("Failed to read. Error: " + err.Error())
+		if err.Error() == disconnectErrorMsg {
+			printDisconnected()
+		}
+		return
+	}
+	var responseMsg bitcoin.Message
+	json.Unmarshal(response, &responseMsg)
+
+	printResult(responseMsg.Hash, responseMsg.Nonce)
 }
 
 // printResult prints the final result to stdout.

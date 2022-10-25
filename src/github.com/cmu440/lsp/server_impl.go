@@ -5,233 +5,113 @@ package lsp
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/cmu440/lspnet"
 	"strconv"
 	"time"
 )
 
-//buffer max size
 const Maxsize = 2000
 
-//server struct
 type server struct {
-	//udp connection
-	conn *lspnet.UDPConn
-	//udp addr
-	addr *lspnet.UDPAddr
-	//received to main routine
-	readChan chan *readMsg
-	//write chan
-	writeChan chan *Msg
-	//before write chan
-	preWriteChan chan *writeData
-	//read to chan
-	outChan chan *Message
-	//do connect chan
-	connectChan chan *readMsg
-	//clients map
-	clients map[int]*serverClient
-	//server id
-	id int
-	//ack msg chan
-	ackChan chan *Msg
-	//close main chan
-	closeMain chan bool
-	//close read chan
-	closeRead chan bool
-	//close write chan
-	closeWrite chan bool
-	//close buffer chan
-	closeBuffer chan bool
-	//close conn chan
-	closeConnect chan bool
-	//close ack chan
-	closeAck chan bool
-	//close seqnum chan
-	closeSeqNum chan bool
-	//close msg chan to sent
-	closeMsg chan bool
-	//buffer chan
-	bufferChan chan *serverClient
-	//to add seqnum chan
-	seqAdd chan *serverClient
-	//to read seqnum chan
-	seqRead chan *serverClient
-	//get read result chan
-	seqRes chan int
-	//write to chan
-	writeMsg chan *writeClient
-	//read to buffer chan
-	readMsg chan *readClient
-	//read result chan
-	resMsg chan *Message
-	//EpochLimit
-	EpochLimit int
-	//EpochMillis
-	EpochMillis int
-	//WindowSize
-	WindowSize int
-	//MaxBackOffInterval
+	conn               *lspnet.UDPConn
+	addr               *lspnet.UDPAddr
+	readChan           chan *Msg
+	writeChan          chan *Msg
+	preWriteChan       chan *writeData
+	outChan            chan *Message
+	connectChan        chan *Msg
+	clients            map[int]*serverClient
+	id                 int
+	ackChan            chan *Msg
+	closeMain          chan bool
+	closeRead          chan bool
+	closeWrite         chan bool
+	closeBuffer        chan bool
+	closeConnect       chan bool
+	closeAck           chan bool
+	closeSeqNum        chan bool
+	closeMsg           chan bool
+	bufferChan         chan *serverClient
+	seqAdd             chan *serverClient
+	seqRead            chan *serverClient
+	seqRes             chan int
+	writeMsg           chan *writeClient
+	readMsg            chan *readClient
+	resMsg             chan *Message
+	EpochLimit         int
+	EpochMillis        int
+	WindowSize         int
 	MaxBackOffInterval int
-	//MaxUnackedMessages
 	MaxUnackedMessages int
-	// to buffer chan
-	clientBuffer chan int
-	//close ack chan
-	closeunAckRoutine chan bool
-	//server seq add chan
-	serverseqAdd chan *serverClient
-	//server seq read chan
-	serverseqRead chan *serverClient
-	//server seq result chan
-	serverseqRes chan int
-	//client window chan
-	clientWinReq chan *clientWindow
-	//client window chan
-	clientWinRes chan int
-	//unack msg chan
-	unAckReq chan *unAckMsg
-	//close handlewrite chan
-	closehandleWrite chan bool
-	//close epoch chan
-	closeEpoch chan bool
-	//close client chan
-	closeclient chan int
-	//server closed
-	closed bool
-	//get close reply chan
-	closeReply chan bool
-	//close unack msg chan
-	closeunAck chan bool
-	//hadclient
-	hadclient bool
-	//buffer msg before read
-	buffer []*Message
-	//read request chan
-	readRequest chan bool
-	//read result chan
-	readResponse chan *Message
-	//close chan
-	closebeforeRead chan bool
-	//close chan
-	closeclientRoutine chan bool
-	//client modify chan
-	clientModify chan *clientInfo
-	//client result chan
-	clientRes chan int
-	//clients chan
-	clientsChan chan *serverClient
-	//epoch chan
-	epochChan chan *serverClient
-	//to write chan
-	towriteChan chan *unAckMsg
-	//close conn chan
-	closeconnChan chan bool
-	//get client chan
-	getClient chan int
-	//return chan
-	returnClient chan *serverClient
+	clientBuffer       chan int
+	closeunAckRoutine  chan bool
+	serverseqAdd       chan *serverClient
+	serverseqRead      chan *serverClient
+	serverseqRes       chan int
+	clientWinReq       chan *clientWindow
+	clientWinRes       chan int
+	unAckReq           chan *unAckMsg
+	closehandleWrite   chan bool
+	closeEpoch         chan bool
+	closeclient        chan *serverClient
+	closed             bool
+	closeReply         chan bool
+	closeunAck         chan bool
+	hadclient          bool
+	buffer             []*Message
+	readRequest        chan bool
+	readResponse       chan *Message
+	closebeforeRead    chan bool
 }
 
 type serverClient struct {
-	//client id
-	id int
-	//client seqnum
-	SeqNum int
-	//client addr
-	addr *lspnet.UDPAddr
-	//msg to be read
-	msgList map[int]*Message
-	//client closed
-	closed bool
-	//seqnum
+	id           int
+	SeqNum       int
+	addr         *lspnet.UDPAddr
+	msgList      map[int]*Message
+	closed       bool
 	serverSeqNum int
-	// unacked msg
-	unAcked []*unAckMsg
-	// buffer msg to write
-	buffer []*Msg
-	//window left
-	left int
-	//if sent last epoch
-	sent bool
-	//if heard last epoch
-	heard int
+	unAcked      []*unAckMsg
+	buffer       []*Msg
+	left         int
+	sent         bool
+	heard        int
 }
 
-//client info
-type clientInfo struct {
-	//client
-	client *serverClient
-	//client action
-	action string
-}
-
-//for read channel
-type readMsg struct {
-	// client addr
-	addr *lspnet.UDPAddr
-	//msg
-	message *Message
-}
-
-//msg to transmit
 type Msg struct {
-	//client
-	client *serverClient
-	//client addr
-	addr *lspnet.UDPAddr
-	//msg
+	addr    *lspnet.UDPAddr
 	message *Message
 }
 
-//to write data
 type writeData struct {
-	//id
-	connId int
-	//content
+	connId  int
 	payload []byte
 }
 
-//client+seqnum
 type readClient struct {
-	//client
 	client *serverClient
-	//seqnum
-	seq int
+	seq    int
 }
 
-//write client msg
 type writeClient struct {
-	//client
-	client *serverClient
-	//seqnum
-	seq int
-	//msg
+	client  *serverClient
+	seq     int
 	message *Message
 }
 
-//client+num
 type clientWindow struct {
-	//client
 	client *serverClient
-	//seqnum
-	num int
+	num    int
 }
 
-//unacked msg
 type unAckMsg struct {
-	//client
-	client *serverClient
-	//seqnum
-	seq int
-	//msg
-	message *Message
-	//CurrentBackoff
+	client         *serverClient
+	seq            int
+	message        *Message
 	CurrentBackoff int
-	//curr epoch
-	epoch int
-	// epoch to be added
-	add int
+	epoch          int
+	add            int
 }
 
 // NewServer creates, initiates, and returns a new server. This function should
@@ -246,19 +126,17 @@ func NewServer(port int, params *Params) (Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	//start listen to port
 	conn, err := lspnet.ListenUDP("udp", addr)
 	if err != nil {
 		return nil, err
 	}
-	//create a new server
 	s := &server{conn,
 		addr,
-		make(chan *readMsg),
+		make(chan *Msg),
 		make(chan *Msg),
 		make(chan *writeData),
 		make(chan *Message),
-		make(chan *readMsg),
+		make(chan *Msg),
 		make(map[int]*serverClient),
 		0,
 		make(chan *Msg),
@@ -292,7 +170,7 @@ func NewServer(port int, params *Params) (Server, error) {
 		make(chan *unAckMsg),
 		make(chan bool),
 		make(chan bool),
-		make(chan int),
+		make(chan *serverClient),
 		false,
 		make(chan bool),
 		make(chan bool),
@@ -301,61 +179,128 @@ func NewServer(port int, params *Params) (Server, error) {
 		make(chan bool),
 		make(chan *Message),
 		make(chan bool),
-		make(chan bool),
-		make(chan *clientInfo),
-		make(chan int),
-		make(chan *serverClient),
-		make(chan *serverClient),
-		make(chan *unAckMsg),
-		make(chan bool),
-		make(chan int),
-		make(chan *serverClient),
 	}
-	//run all routine
 	go s.mainRoutine()
 	go s.readRoutine()
 	go s.writeRoutine()
+	go s.connectRoutine()
+	go s.ackRoutine()
 	go s.seqNumRoutine()
 	go s.msgRoutine()
 	go s.handleWrite()
+	go s.unAckRoutine()
+	go s.epochRoutine()
 	go s.beforeRead()
 	return s, nil
 }
 
-//main routine, process almost all things
 func (s *server) mainRoutine() {
+	for {
+		select {
+		case <-s.closeMain:
+			//fmt.Println("closedMain")
+			return
+		case msg := <-s.readChan:
+			//fmt.Println("readChan")
+			message := msg.message
+			id := msg.message.ConnID
+			client := s.clients[id]
+			if client != nil {
+				client.heard = 0
+			}
+			switch message.Type {
+			case MsgConnect:
+				//fmt.Println("con?")
+				s.connectChan <- msg
+			case MsgAck, MsgCAck:
+				//fmt.Println("ack?")
+				s.unAckReq <- &unAckMsg{client, -1, message, -1, -1, -1}
+			case MsgData:
+				//fmt.Println("msg?")
+				if message.Size != len(message.Payload) {
+					if message.Size > len(message.Payload) {
+						continue
+					}
+					message.Payload = message.Payload[:message.Size]
+				}
+				if message.Checksum != CalculateChecksum(message.ConnID, message.SeqNum, message.Size, message.Payload) {
+					continue
+				}
+				s.ackChan <- msg
+				seq := msg.message.SeqNum
+				s.seqRead <- client
+				currSeq := <-s.seqRes
+				//fmt.Println("server: ", message)
+				if seq <= currSeq {
+					continue
+				} else if seq == currSeq+1 {
+					s.seqAdd <- client
+					s.outChan <- msg.message
+					for {
+						s.seqRead <- client
+						currSeq := <-s.seqRes
+						s.readMsg <- &readClient{client, currSeq + 1}
+						message := <-s.resMsg
+						if message == nil {
+							break
+						}
+						s.outChan <- message
+						s.seqAdd <- client
+					}
+				} else {
+					s.writeMsg <- &writeClient{client, seq, message}
+				}
+				//fmt.Println("msg!")
+			}
+			//fmt.Println("processed")
+		}
+	}
+}
+
+func (s *server) epochRoutine() {
 	ticker := time.NewTicker(time.Duration(s.EpochMillis * 1000000))
 	for {
 		select {
-		//to close main
-		case <-s.closeMain:
+		case <-ticker.C:
+			//fmt.Println("ticker!!")
+			for _, client := range s.clients {
+				client.heard += 1
+				if client.heard >= s.EpochLimit {
+					delete(s.clients, client.id)
+					s.outChan <- nil
+					continue
+				}
+				for _, msg := range client.unAcked {
+					if msg.epoch == msg.CurrentBackoff {
+						s.writeChan <- &Msg{client.addr, msg.message}
+						msg.CurrentBackoff += msg.add + 1
+						msg.add *= 2
+						if msg.add > s.MaxBackOffInterval {
+							msg.add = s.MaxBackOffInterval
+						}
+					}
+					msg.epoch += 1
+				}
+				if client.sent {
+					client.sent = false
+				} else {
+					ack := NewAck(client.id, 0)
+					s.writeChan <- &Msg{client.addr, ack}
+				}
+			}
+		case <-s.closeEpoch:
 			ticker.Stop()
 			return
-			// get client info
-		case id := <-s.getClient:
-			s.returnClient <- s.clients[id]
-			//write channel to be wrote
-		case req := <-s.towriteChan:
-			client := req.client
-			message := req.message
-			SeqNum := req.seq
-			left := client.left
-			msg := &Msg{client, client.addr, message}
-			//traverse to renew sent
-			if len(client.unAcked) < s.MaxUnackedMessages && left+s.WindowSize >= SeqNum {
-				client.unAcked = append(client.unAcked, req)
-				if client != nil {
-					client.sent = true
-				}
-				s.writeChan <- msg
-			} else {
-				client.buffer = append(client.buffer, msg)
-			}
-			//check if it can be closed and close
-			if client.closed && len(client.unAcked) == 0 && len(client.buffer) == 0 {
-				delete(s.clients, client.id)
-			}
-			//handle close unack signal
+		}
+	}
+}
+
+//for sliding window
+func (s *server) unAckRoutine() {
+	for {
+		select {
+		case <-s.closeunAck:
+			return
 		case <-s.closeunAckRoutine:
 			for _, client := range s.clients {
 				if len(client.unAcked) == 0 && len(client.buffer) == 0 {
@@ -367,110 +312,24 @@ func (s *server) mainRoutine() {
 			} else {
 				s.closeReply <- false
 			}
-			//close a client
-		case id := <-s.closeclient:
-			client := s.clients[id]
-			if client == nil {
-				s.closeconnChan <- false
-				continue
-			}
+		case client := <-s.closeclient:
 			client.closed = true
 			if len(client.unAcked) == 0 && len(client.buffer) == 0 {
 				delete(s.clients, client.id)
 			}
-			s.closeconnChan <- true
-			//ticker channel to do epoch
-		case <-ticker.C:
-			for _, client := range s.clients {
-				client.heard += 1
-				if client.heard >= s.EpochLimit {
-					delete(s.clients, client.id)
-					s.outChan <- nil
-					continue
-				}
-				// resend unack msg
-				for _, msg := range client.unAcked {
-					if msg.epoch == msg.CurrentBackoff {
-						if client != nil {
-							client.sent = true
-						}
-						//do epoch increase
-						s.writeChan <- &Msg{client, client.addr, msg.message}
-						msg.CurrentBackoff += msg.add + 1
-						msg.add *= 2
-						//if reach max limit
-						if msg.add > s.MaxBackOffInterval {
-							msg.add = s.MaxBackOffInterval
-						}
-					}
-					msg.epoch += 1
-				}
-				//sent last epoch
-				if client.sent {
-					client.sent = false
-				} else {
-					ack := NewAck(client.id, 0)
-					if client != nil {
-						client.sent = true
-					}
-					//write ack to client
-					s.writeChan <- &Msg{client, client.addr, ack}
-				}
+		case req := <-s.unAckReq:
+			client := req.client
+			seq := req.seq
+			message := req.message
+			if client == nil {
+				continue
 			}
-			//all msg received by server
-		case msg := <-s.readChan:
-			message := msg.message
-			id := msg.message.ConnID
-			client := s.clients[id]
-			if client != nil {
-				client.heard = 0
-			}
-			switch message.Type {
-			case MsgConnect:
-				dup := false
-				//check duplicate for client
-				for _, client := range s.clients {
-					if client.addr == msg.addr {
-						ack := NewAck(client.id, msg.message.SeqNum)
-						newmsg := &Msg{client, msg.addr, ack}
-						if client != nil {
-							client.sent = true
-						}
-						s.writeChan <- newmsg
-						dup = true
-						break
-					}
-				}
-				//if no duplicate
-				if !dup {
-					s.id += 1
-					client := &serverClient{s.id,
-						msg.message.SeqNum,
-						msg.addr,
-						make(map[int]*Message),
-						false,
-						0,
-						make([]*unAckMsg, 0),
-						make([]*Msg, 0),
-						0,
-						false,
-						0}
-					s.clients[client.id] = client
-					s.hadclient = true
-					ack := NewAck(s.id, msg.message.SeqNum)
-					newmsg := &Msg{client, msg.addr, ack}
-					if client != nil {
-						client.sent = true
-					}
-					s.writeChan <- newmsg
-				}
-			case MsgAck, MsgCAck:
-				if client == nil {
-					continue
-				}
+			//ack msg
+			if seq == -1 {
+				//fmt.Println("to ack ", message.SeqNum)
 				dup := true
-				//check duplicate
 				for i := 0; i < len(client.unAcked); i++ {
+					//fmt.Print(client.unAcked[i].message.SeqNum, " ")
 					if client.unAcked[i].message.SeqNum == message.SeqNum {
 						client.unAcked = append(client.unAcked[:i], client.unAcked[i+1:]...)
 						dup = false
@@ -478,9 +337,9 @@ func (s *server) mainRoutine() {
 					}
 				}
 				if dup {
+					//fmt.Println("dup")
 					continue
 				}
-				//if no dup, then update window and buffer
 				if len(client.unAcked) == 0 {
 					if len(client.buffer) > 0 {
 						client.left = client.buffer[0].message.SeqNum - 1
@@ -493,13 +352,8 @@ func (s *server) mainRoutine() {
 					client.left = client.unAcked[0].message.SeqNum
 				}
 				left := client.left
-				//update window and sent more msg to client
 				for {
 					if len(client.buffer) > 0 && len(client.unAcked) < s.MaxUnackedMessages && left+s.WindowSize >= client.buffer[0].message.SeqNum {
-						if client != nil {
-							client.sent = true
-						}
-						//sent buffer msg to client
 						s.writeChan <- client.buffer[0]
 						client.unAcked = append(client.unAcked, &unAckMsg{client, client.buffer[0].message.SeqNum, client.buffer[0].message, 0, 0, 1})
 						client.buffer = client.buffer[1:]
@@ -507,96 +361,57 @@ func (s *server) mainRoutine() {
 						break
 					}
 				}
-				//check if can be closed and then close
-				if client.closed && len(client.unAcked) == 0 && len(client.buffer) == 0 {
-					delete(s.clients, client.id)
+				//fmt.Println("acked ", message.SeqNum)
+				// add unack to list
+			} else {
+				left := client.left
+				msg := &Msg{client.addr, message}
+				//fmt.Println("!", message.String())
+				if len(client.unAcked) < s.MaxUnackedMessages && left+s.WindowSize >= seq {
+					client.unAcked = append(client.unAcked, req)
+					s.writeChan <- msg
+				} else {
+					//fmt.Println(len(client.unAcked), s.MaxUnackedMessages, left, s.WindowSize, seq)
+					//fmt.Println("toBuffer", message.SeqNum)
+					client.buffer = append(client.buffer, msg)
 				}
-			case MsgData:
-				//check size
-				if message.Size != len(message.Payload) {
-					if message.Size > len(message.Payload) {
-						continue
-					}
-					message.Payload = message.Payload[:message.Size]
-				}
-				//check sum
-				if message.Checksum != CalculateChecksum(message.ConnID, message.SeqNum, message.Size, message.Payload) {
-					continue
-				}
-				ack := NewAck(msg.message.ConnID, msg.message.SeqNum)
-				newmsg := &Msg{client, msg.addr, ack}
-				if client != nil {
-					client.sent = true
-					//get seqnum
-					s.writeChan <- newmsg
-					seq := msg.message.SeqNum
-					s.seqRead <- client
-					currSeq := <-s.seqRes
-					//check seqsum if duplicate
-					if seq <= currSeq {
-						continue
-					} else if seq == currSeq+1 {
-						s.seqAdd <- client
-						s.outChan <- msg.message
-						//sent all buffer msg to client
-						for {
-							s.seqRead <- client
-							currSeq := <-s.seqRes
-							s.readMsg <- &readClient{client, currSeq + 1}
-							message := <-s.resMsg
-							if message == nil {
-								break
-							}
-							//sent msg
-							s.outChan <- message
-							s.seqAdd <- client
-						}
-					} else {
-						//sent to buffer
-						s.writeMsg <- &writeClient{client, seq, message}
-					}
-				}
+			}
+			if client.closed && len(client.unAcked) == 0 && len(client.buffer) == 0 {
+				delete(s.clients, client.id)
 			}
 		}
 	}
 }
 
-// build data and sent before real write
 func (s *server) handleWrite() {
 	for {
 		select {
-		//close write
 		case <-s.closehandleWrite:
 			return
-			// build data and ready sent
 		case writedata := <-s.preWriteChan:
 			connId := writedata.connId
 			payload := writedata.payload
-			s.getClient <- connId
-			client := <-s.returnClient
+			client := s.clients[writedata.connId]
 			if client == nil {
 				continue
 			}
-			//get seqnum to build
 			s.serverseqAdd <- client
 			s.serverseqRead <- client
 			SeqNum := <-s.serverseqRes
 			size := len(writedata.payload)
 			sum := CalculateChecksum(connId, SeqNum, size, payload)
 			message := NewData(connId, SeqNum, size, payload, sum)
-			req := &unAckMsg{client, SeqNum, message, 0, 0, 1}
-			s.towriteChan <- req
+			//fmt.Println("towrite: ", message.String())
+			s.unAckReq <- &unAckMsg{client, SeqNum, message, 0, 0, 1}
 		}
 	}
 }
 
-//handle buffer unsent msg
 func (s *server) msgRoutine() {
 	for {
 		select {
 		case <-s.closeMsg:
 			return
-			//build buffer msg
 		case msg := <-s.writeMsg:
 			msg.client.msgList[msg.seq] = msg.message
 		case msg := <-s.readMsg:
@@ -610,7 +425,6 @@ func (s *server) msgRoutine() {
 	}
 }
 
-//seq routine to handle all seq read+write
 func (s *server) seqNumRoutine() {
 	for {
 		select {
@@ -628,7 +442,58 @@ func (s *server) seqNumRoutine() {
 	}
 }
 
-//read routine from client
+func (s *server) ackRoutine() {
+	for {
+		select {
+		case <-s.closeAck:
+			return
+		case msg := <-s.ackChan:
+			ack := NewAck(msg.message.ConnID, msg.message.SeqNum)
+			msg = &Msg{msg.addr, ack}
+			s.writeChan <- msg
+		}
+	}
+}
+
+func (s *server) connectRoutine() {
+	for {
+		select {
+		case <-s.closeConnect:
+			return
+		case msg := <-s.connectChan:
+			dup := false
+			for _, client := range s.clients {
+				if client.addr == msg.addr {
+					ack := NewAck(client.id, msg.message.SeqNum)
+					msg = &Msg{msg.addr, ack}
+					s.writeChan <- msg
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				s.id += 1
+				//fmt.Println("creat", s.id)
+				s.clients[s.id] = &serverClient{s.id,
+					msg.message.SeqNum,
+					msg.addr,
+					make(map[int]*Message),
+					false,
+					0,
+					make([]*unAckMsg, 0),
+					make([]*Msg, 0),
+					0,
+					false,
+					0}
+				s.hadclient = true
+				ack := NewAck(s.id, msg.message.SeqNum)
+				msg = &Msg{msg.addr, ack}
+				s.writeChan <- msg
+			}
+		}
+	}
+}
+
 func (s *server) readRoutine() {
 	for {
 		select {
@@ -642,34 +507,38 @@ func (s *server) readRoutine() {
 			}
 			var message Message
 			err = json.Unmarshal(buffer[:n], &message)
+			fmt.Println("!server received: ", message.String())
 			if err != nil {
 				return
 			}
-			//sent to main routine
-			msg := &readMsg{addr, &message}
+			msg := &Msg{addr, &message}
 			s.readChan <- msg
+			//fmt.Println("!sent to read chan")
 		}
 	}
 }
 
-//final write channel
 func (s *server) writeRoutine() {
 	for {
 		select {
 		case msg := <-s.writeChan:
+			client := s.clients[msg.message.ConnID]
+			// fmt.Println(msg.addr, msg.message.Payload)
 			buffer, err := json.Marshal(msg.message)
 			if err != nil {
 				continue
 			}
-			//write to udp
 			s.conn.WriteToUDP(buffer, msg.addr)
+			fmt.Println("!server wrote: ", msg.message.String())
+			if client != nil {
+				client.sent = true
+			}
 		case <-s.closeWrite:
 			return
 		}
 	}
 }
 
-//read buffer channel to block read
 func (s *server) beforeRead() {
 	for {
 		select {
@@ -682,7 +551,6 @@ func (s *server) beforeRead() {
 				s.readResponse <- s.buffer[0]
 				s.buffer = s.buffer[1:]
 			} else {
-				//if no new msg coming, block here
 				select {
 				case <-s.closebeforeRead:
 					return
@@ -694,21 +562,19 @@ func (s *server) beforeRead() {
 	}
 }
 
-//read function to be called
 func (s *server) Read() (int, []byte, error) {
 	if s.closed {
 		return 0, nil, errors.New("closed")
 	}
-	//call readbuffer to get msg
 	s.readRequest <- true
 	message := <-s.readResponse
 	if message == nil {
 		return 0, nil, errors.New("client closed")
 	}
+	fmt.Println("!server read: ", message.String())
 	return message.ConnID, message.Payload, nil
 }
 
-//write function to be called
 func (s *server) Write(connId int, payload []byte) error {
 	if s.closed {
 		return errors.New("closed")
@@ -718,25 +584,24 @@ func (s *server) Write(connId int, payload []byte) error {
 	}
 	data := &writeData{connId, payload}
 	s.preWriteChan <- data
+	//fmt.Println("sent to write")
 	return nil
 }
 
-//close one connection, sleep and check
 func (s *server) CloseConn(connId int) error {
-	time.Sleep(time.Duration(s.EpochMillis * 1000))
-	s.closeclient <- connId
-	res := <-s.closeconnChan
-	if !res {
-		return errors.New("no client")
+	if _, ok := s.clients[connId]; !ok {
+		return errors.New("connId does not exist")
 	}
+	client := s.clients[connId]
+	time.Sleep(time.Duration(s.EpochMillis * 1000000))
+	s.closeclient <- client
 	return nil
 }
 
-//close server step by step
 func (s *server) Close() error {
+	//fmt.Println("called close")
 	s.closed = true
 	closed := false
-	//wait all msg sent by sleep
 	for {
 		time.Sleep(time.Duration(s.EpochMillis * 1000000))
 		s.closeunAckRoutine <- true
@@ -745,14 +610,28 @@ func (s *server) Close() error {
 			break
 		}
 	}
-	//send signal to ListenUDP
+	//fmt.Println("done1")
 	s.conn.Close()
 	s.closebeforeRead <- true
 	s.closeRead <- true
+	//fmt.Println("done2")
 	s.closeMain <- true
+	//fmt.Println("done3")
 	s.closeWrite <- true
+	//fmt.Println("done4")
+	s.closeConnect <- true
+	//fmt.Println("done5")
+	s.closeAck <- true
+	//fmt.Println("done6")
 	s.closeSeqNum <- true
+	//fmt.Println("done7")
 	s.closeMsg <- true
+	//fmt.Println("done8")
 	s.closehandleWrite <- true
+	//fmt.Println("done9")
+	s.closeEpoch <- true
+	//fmt.Println("done10")
+	s.closeunAck <- true
+	fmt.Println("!!!closed")
 	return nil
 }

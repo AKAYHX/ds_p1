@@ -6,14 +6,14 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"github.com/cmu440/lspnet"
 	"time"
 )
 
 const (
-	MaxPacketSize = 1000
-	MilliToNano   = 1000000
+	MaxPacketSize      = 1000
+	MilliToNano        = 1000000
+	DisconnectErrorMsg = "disconnected"
 )
 
 type client struct {
@@ -127,7 +127,7 @@ func NewClient(hostport string, initialSeqNum int, params *Params) (Client, erro
 		case <-time.After(time.Duration(MilliToNano * params.EpochMillis)):
 		}
 	}
-	return nil, errors.New("exceed EpochLimit")
+	return nil, errors.New(DisconnectErrorMsg)
 }
 
 // Set up connection with the server
@@ -240,7 +240,7 @@ func (c *client) Read() ([]byte, error) {
 	closed := <-c.finalClose
 	c.finalClose <- closed
 	if closed {
-		return nil, errors.New("the client is closed")
+		return nil, errors.New(DisconnectErrorMsg)
 	}
 
 	for {
@@ -263,7 +263,7 @@ func (c *client) Read() ([]byte, error) {
 			c.largestReadMsgSeqNum <- largestReadMsgSeqNum
 
 			if largestReadMsgSeqNum == largestDataSeqNum {
-				return nil, errors.New(fmt.Sprintf("client %d the connection is closed", c.connID))
+				return nil, errors.New(DisconnectErrorMsg)
 			}
 
 			// Otherwise, block to process one more message
@@ -280,7 +280,7 @@ func (c *client) Read() ([]byte, error) {
 			case finalClosed := <-c.finalClose:
 				c.finalClose <- finalClosed
 				if finalClosed {
-					return nil, errors.New(fmt.Sprintf("client %d the connection is closed", c.connID))
+					return nil, errors.New(DisconnectErrorMsg)
 				}
 			}
 		}
@@ -445,7 +445,7 @@ func (c *client) Write(payload []byte) error {
 	closed := <-c.finalClose
 	c.finalClose <- closed
 	if closed {
-		return errors.New("the client is closed")
+		return errors.New(DisconnectErrorMsg)
 	}
 
 	seqNum := <-c.currentSeqNum
