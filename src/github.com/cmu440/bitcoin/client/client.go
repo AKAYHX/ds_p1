@@ -48,7 +48,7 @@ func main() {
 
 	client, err := lsp.NewClient(hostport, isn, lsp.NewParams())
 	if err != nil {
-		fmt.Println("Failed to connect to server:", err)
+		printDisconnected()
 		return
 	}
 
