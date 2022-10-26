@@ -91,7 +91,7 @@ func main() {
 			tmpHash := bitcoin.Hash(message.Data, i)
 			if tmpHash < hash {
 				hash = tmpHash
-				nonce = hash
+				nonce = i
 			}
 		}
 
