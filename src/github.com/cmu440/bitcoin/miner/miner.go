@@ -71,7 +71,6 @@ func main() {
 
 	defer miner.Close()
 
-	// TODO: implement this!
 	for {
 		request, err := miner.Read()
 		if err != nil {

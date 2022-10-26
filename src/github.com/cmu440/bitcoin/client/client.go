@@ -54,7 +54,6 @@ func main() {
 
 	defer client.Close()
 
-	// TODO: implement this!
 	// Send request to the server
 	payload, err := json.Marshal(bitcoin.NewRequest(message, 0, maxNonce))
 	if err != nil {
