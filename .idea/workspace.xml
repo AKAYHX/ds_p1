@@ -5,7 +5,9 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="3f5ee8fc-ddb3-4dbe-8201-b5a8b1130c3a" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/github.com/cmu440/bitcoin/server/server.go" beforeDir="false" afterPath="$PROJECT_DIR$/src/github.com/cmu440/bitcoin/server/server.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/github.com/cmu440/clientLog.txt" beforeDir="false" afterPath="$PROJECT_DIR$/src/github.com/cmu440/clientLog.txt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/github.com/cmu440/lsp/server_impl.go" beforeDir="false" afterPath="$PROJECT_DIR$/src/github.com/cmu440/lsp/server_impl.go" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
