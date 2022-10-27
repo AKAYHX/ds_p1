@@ -10,34 +10,38 @@ import (
 	"strconv"
 )
 
-const chunksize = 10000
+// LB Strategy: we implemented Shortest Remaining Time First:
+// We use a queue to store all clients with their tasks
+// it is sorted by their number of subtasks( (high - low) / chunksize ) in ascending order
+// we insert new client by their # of tasks and update the queue when a miner result coming back
+const chunksize = 10000 //chunksize
 
 type server struct {
-	lspServer lsp.Server
-	miners    []*Miner
-	allMiners map[int]*Miner
-	clients   []*Client
+	lspServer lsp.Server     // lsp server
+	miners    []*Miner       // available miners queue
+	allMiners map[int]*Miner // all miners info
+	clients   []*Client      // client queue
 }
 
 type Client struct {
-	clientID int
-	data     string
-	count    int
-	tasks    []*Task
-	hash     uint64
-	nonce    uint64
+	clientID int     // connid
+	data     string  // data
+	count    int     // number of tasks
+	tasks    []*Task // tasks queue
+	hash     uint64  // hash
+	nonce    uint64  // smallest nonce
 }
 
 type Miner struct {
-	MinerID  int
-	clientID int
-	Low      uint64
-	High     uint64
+	MinerID  int    //connid
+	clientID int    //connid of current serving client
+	Low      uint64 // low nonce
+	High     uint64 // high nonce
 }
 
 type Task struct {
-	Low  uint64
-	High uint64
+	Low  uint64 // low nonce
+	High uint64 // high nonce
 }
 
 func startServer(port int) (*server, error) {
@@ -93,8 +97,8 @@ func main() {
 	defer srv.lspServer.Close()
 	for {
 		connID, payload, err := srv.lspServer.Read()
+		//handle failure
 		if err != nil {
-			//fmt.Println("err:", connID)
 			if _, ok := srv.allMiners[connID]; ok {
 				srv.minerFailure(connID)
 			} else {
@@ -111,7 +115,6 @@ func main() {
 				//insert to miners
 				miner := &Miner{connID, -1, 0, 0}
 				srv.miners = append(srv.miners, miner)
-				//fmt.Println("join:", connID)
 				srv.allMiners[connID] = miner
 			case bitcoin.Request:
 				lower := message.Lower
@@ -122,6 +125,7 @@ func main() {
 					make([]*Task, 0),
 					^uint64(0),
 					0}
+				//divide big task into small tasks by chunksize
 				for {
 					client.count += 1
 					if lower+chunksize >= upper {
@@ -136,10 +140,11 @@ func main() {
 			case bitcoin.Result:
 				miner := srv.allMiners[connID]
 				clientID := miner.clientID
+				//traverse to find client info
 				for i, client := range srv.clients {
-					// fmt.Println("xx", srv.clients[i].clientID, clientID)
 					if client.clientID == clientID {
 						client.count -= 1
+						//get the smaller hash and nounce
 						if message.Hash < client.hash {
 							client.nonce = message.Nonce
 							client.hash = message.Hash
@@ -151,22 +156,13 @@ func main() {
 							if err != nil {
 								continue
 							}
+							//write to client
 							err = srv.lspServer.Write(client.clientID, output)
 							if err != nil {
 								srv.clientFailure(client.clientID)
 							}
-							// fmt.Println("~", srv.clients[0].clientID)
-							// fmt.Println("~~~", srv.clients[1].clientID)
 							srv.clients = append(srv.clients[:i], srv.clients[i+1:]...)
 						}
-						//} else if i != 0 {
-						// // swap if less count
-						// if client.count < srv.clients[i-1].count {
-						//    temp := srv.clients[i-1]
-						//    srv.clients[i-1] = client
-						//    srv.clients[i] = temp
-						// }
-						//}
 						break
 					}
 				}
@@ -179,16 +175,15 @@ func main() {
 	}
 }
 
-//scheduler
+//load balance scheduler
 func (srv *server) insertClient(client *Client) {
 	flag := true
+	//insert according to the number of tasks
 	for i, curr := range srv.clients {
 		if len(curr.tasks) <= len(client.tasks) {
 			continue
 		} else {
-			// srv.printClients()
 			srv.clients = append(srv.clients[:i], append([]*Client{client}, srv.clients[i:]...)...)
-			// srv.printClients()
 			flag = false
 			break
 		}
@@ -202,8 +197,8 @@ func (srv *server) insertClient(client *Client) {
 func (srv *server) process() {
 	var client *Client
 	i := 0
+	// assign tasks to miners in order
 	for {
-		// fmt.Println(len(srv.clients), len(srv.miners))
 		if len(srv.clients) == 0 || len(srv.miners) == 0 {
 			break
 		}
@@ -211,7 +206,6 @@ func (srv *server) process() {
 		for {
 			if i < len(srv.clients) {
 				client = srv.clients[i]
-				// fmt.Println("!!", client.clientID, len(client.tasks))
 			} else {
 				break
 			}
@@ -229,24 +223,26 @@ func (srv *server) process() {
 		miner.Low = client.tasks[0].Low
 		miner.High = client.tasks[0].High
 		miner.clientID = client.clientID
-		// fmt.Println(client.clientID, len(client.tasks), client.count)
 		output, err := json.Marshal(bitcoin.NewRequest(client.data, miner.Low, miner.High))
 		if err != nil {
 			continue
 		}
+		//write task to miner
 		err = srv.lspServer.Write(miner.MinerID, output)
 		if err != nil {
 			srv.minerFailure(miner.MinerID)
 		} else {
 			client.tasks = client.tasks[1:]
 		}
+		// update available miners
 		srv.miners = srv.miners[1:]
 	}
 }
 
+// handle miner failure
 func (srv *server) minerFailure(connID int) {
-	// fmt.Println("miner:", connID)
 	miner := srv.allMiners[connID]
+	//if miner has ongoing task
 	if miner.clientID != -1 {
 		for _, client := range srv.clients {
 			if client.clientID == miner.clientID {
@@ -258,8 +254,8 @@ func (srv *server) minerFailure(connID int) {
 	}
 }
 
+// handle client failure
 func (srv *server) clientFailure(connID int) {
-	// fmt.Println("client:", connID)
 	for i, client := range srv.clients {
 		if client.clientID == connID {
 			srv.clients = append(srv.clients[:i], srv.clients[i+1:]...)
@@ -268,6 +264,7 @@ func (srv *server) clientFailure(connID int) {
 	}
 }
 
+// for debugging print out
 func (srv *server) printClients() {
 	fmt.Print("debug:")
 	for _, client := range srv.clients {
