@@ -5,7 +5,6 @@ package lsp
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"github.com/cmu440/lspnet"
 	"strconv"
 	"time"
@@ -507,7 +506,7 @@ func (s *server) readRoutine() {
 			}
 			var message Message
 			err = json.Unmarshal(buffer[:n], &message)
-			fmt.Println("!server received: ", message.String())
+			//fmt.Println("!server received: ", message.String())
 			if err != nil {
 				return
 			}
@@ -529,7 +528,7 @@ func (s *server) writeRoutine() {
 				continue
 			}
 			s.conn.WriteToUDP(buffer, msg.addr)
-			fmt.Println("!server wrote: ", msg.message.String())
+			//fmt.Println("!server wrote: ", msg.message.String())
 			if client != nil {
 				client.sent = true
 			}
@@ -571,7 +570,7 @@ func (s *server) Read() (int, []byte, error) {
 	if message == nil {
 		return 0, nil, errors.New("client closed")
 	}
-	fmt.Println("!server read: ", message.String())
+	//fmt.Println("!server read: ", message.String())
 	return message.ConnID, message.Payload, nil
 }
 
@@ -632,6 +631,6 @@ func (s *server) Close() error {
 	s.closeEpoch <- true
 	//fmt.Println("done10")
 	s.closeunAck <- true
-	fmt.Println("!!!closed")
+	//fmt.Println("!!!closed")
 	return nil
 }
