@@ -266,7 +266,8 @@ func (s *server) epochRoutine() {
 				client.heard += 1
 				if client.heard >= s.EpochLimit {
 					delete(s.clients, client.id)
-					s.outChan <- nil
+					message := &Message{MsgConnect, client.id, -1, -1, 0, nil}
+					s.outChan <- message
 					continue
 				}
 				for _, msg := range client.unAcked {
@@ -567,8 +568,8 @@ func (s *server) Read() (int, []byte, error) {
 	}
 	s.readRequest <- true
 	message := <-s.readResponse
-	if message == nil {
-		return 0, nil, errors.New("client closed")
+	if message.Type == MsgConnect && message.Size == -1 && message.SeqNum == -1 && message.Payload == nil {
+		return message.ConnID, nil, errors.New("client closed")
 	}
 	//fmt.Println("!server read: ", message.String())
 	return message.ConnID, message.Payload, nil

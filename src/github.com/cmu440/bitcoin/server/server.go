@@ -94,6 +94,7 @@ func main() {
 	for {
 		connID, payload, err := srv.lspServer.Read()
 		if err != nil {
+			//fmt.Println("err:", connID)
 			if _, ok := srv.allMiners[connID]; ok {
 				srv.minerFailure(connID)
 			} else {
@@ -110,6 +111,7 @@ func main() {
 				//insert to miners
 				miner := &Miner{connID, -1, 0, 0}
 				srv.miners = append(srv.miners, miner)
+				//fmt.Println("join:", connID)
 				srv.allMiners[connID] = miner
 			case bitcoin.Request:
 				lower := message.Lower
@@ -243,6 +245,7 @@ func (srv *server) process() {
 }
 
 func (srv *server) minerFailure(connID int) {
+	// fmt.Println("miner:", connID)
 	miner := srv.allMiners[connID]
 	if miner.clientID != -1 {
 		for _, client := range srv.clients {
@@ -256,6 +259,7 @@ func (srv *server) minerFailure(connID int) {
 }
 
 func (srv *server) clientFailure(connID int) {
+	// fmt.Println("client:", connID)
 	for i, client := range srv.clients {
 		if client.clientID == connID {
 			srv.clients = append(srv.clients[:i], srv.clients[i+1:]...)
