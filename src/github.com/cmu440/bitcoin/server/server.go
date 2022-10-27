@@ -135,10 +135,12 @@ func main() {
 				miner := srv.allMiners[connID]
 				clientID := miner.clientID
 				for i, client := range srv.clients {
+					// fmt.Println("xx", srv.clients[i].clientID, clientID)
 					if client.clientID == clientID {
 						client.count -= 1
 						if message.Hash < client.hash {
 							client.nonce = message.Nonce
+							client.hash = message.Hash
 						}
 						//if finished all subtasks computation
 						if client.count == 0 {
@@ -151,6 +153,8 @@ func main() {
 							if err != nil {
 								srv.clientFailure(client.clientID)
 							}
+							// fmt.Println("~", srv.clients[0].clientID)
+							// fmt.Println("~~~", srv.clients[1].clientID)
 							srv.clients = append(srv.clients[:i], srv.clients[i+1:]...)
 						}
 						//} else if i != 0 {
@@ -180,7 +184,9 @@ func (srv *server) insertClient(client *Client) {
 		if len(curr.tasks) <= len(client.tasks) {
 			continue
 		} else {
-			srv.clients = append(append(srv.clients[:i], client), srv.clients[i:]...)
+			// srv.printClients()
+			srv.clients = append(srv.clients[:i], append([]*Client{client}, srv.clients[i:]...)...)
+			// srv.printClients()
 			flag = false
 			break
 		}
@@ -195,6 +201,7 @@ func (srv *server) process() {
 	var client *Client
 	i := 0
 	for {
+		// fmt.Println(len(srv.clients), len(srv.miners))
 		if len(srv.clients) == 0 || len(srv.miners) == 0 {
 			break
 		}
@@ -202,6 +209,7 @@ func (srv *server) process() {
 		for {
 			if i < len(srv.clients) {
 				client = srv.clients[i]
+				// fmt.Println("!!", client.clientID, len(client.tasks))
 			} else {
 				break
 			}
@@ -219,6 +227,7 @@ func (srv *server) process() {
 		miner.Low = client.tasks[0].Low
 		miner.High = client.tasks[0].High
 		miner.clientID = client.clientID
+		// fmt.Println(client.clientID, len(client.tasks), client.count)
 		output, err := json.Marshal(bitcoin.NewRequest(client.data, miner.Low, miner.High))
 		if err != nil {
 			continue
@@ -252,5 +261,12 @@ func (srv *server) clientFailure(connID int) {
 			srv.clients = append(srv.clients[:i], srv.clients[i+1:]...)
 			break
 		}
+	}
+}
+
+func (srv *server) printClients() {
+	fmt.Print("debug:")
+	for _, client := range srv.clients {
+		fmt.Print(client.clientID)
 	}
 }
